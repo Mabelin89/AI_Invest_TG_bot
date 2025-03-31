@@ -4,15 +4,19 @@ import requests
 from io import StringIO
 import os
 
+# Константа для директории
+HISTORICAL_DATA_DIR = "historical_data"
+
+
 def fetch_moex_candles(ticker, start_date, end_date, timeframe):
     timeframe_map = {
-        '1m': 1,     # 1 минута
-        '10m': 10,   # 10 минут
-        '1h': 60,    # 1 час
-        'daily': 24, # 1 день
-        'weekly': 7, # 1 неделя
-        'monthly': 31, # 1 месяц
-        'quarterly': 4 # 1 квартал
+        '1m': 1,  # 1 минута
+        '10m': 10,  # 10 минут
+        '1h': 60,  # 1 час
+        'daily': 24,  # 1 день
+        'weekly': 7,  # 1 неделя
+        'monthly': 31,  # 1 месяц
+        'quarterly': 4  # 1 квартал
     }
     interval = timeframe_map.get(timeframe.lower(), 24)
     url = f"https://iss.moex.com/iss/engines/stock/markets/shares/securities/{ticker}/candles.csv?interval={interval}&from={start_date}&till={end_date}"
@@ -24,11 +28,12 @@ def fetch_moex_candles(ticker, start_date, end_date, timeframe):
         print(f"Ошибка запроса для периода {start_date} - {end_date}: {response.status_code}")
         return None
 
-def is_data_outdated(filename, timeframe, period_years):
-    if not os.path.exists(filename):
+
+def is_data_outdated(file_path, timeframe, period_years):
+    if not os.path.exists(file_path):
         return True
 
-    mod_time = datetime.fromtimestamp(os.path.getmtime(filename))
+    mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
     now = datetime.now()
 
     timeframe_thresholds = {
@@ -43,46 +48,44 @@ def is_data_outdated(filename, timeframe, period_years):
     threshold = timeframe_thresholds.get(timeframe.lower(), 24 * 3600)
     return (now - mod_time).total_seconds() >= threshold
 
+
 def get_historical_data(ticker, timeframe, period_years):
+    # Создание директории, если её нет
+    if not os.path.exists(HISTORICAL_DATA_DIR):
+        os.makedirs(HISTORICAL_DATA_DIR)
+
     now = datetime.now()
     if timeframe.lower() in ['1m', '10m', '1h']:
         date_str = now.strftime('%Y%m%d_%H%M%S')
     else:
         date_str = now.strftime('%Y%m%d')
     filename = f"{ticker.upper()}_{timeframe.upper()}_{period_years}Y_{date_str}.csv"
+    file_path = os.path.join(HISTORICAL_DATA_DIR, filename)
 
-    if os.path.exists(filename) and not is_data_outdated(filename, timeframe, period_years):
-        print(f"Данные в '{filename}' актуальны, загрузка из файла")
-        return pd.read_csv(filename)
+    # Проверка актуальности данных
+    if os.path.exists(file_path) and not is_data_outdated(file_path, timeframe, period_years):
+        print(f"Данные в '{file_path}' актуальны, загрузка из файла")
+        return pd.read_csv(file_path)
 
-    if os.path.exists(filename):
-        os.remove(filename)
-        print(f"Удален устаревший файл '{filename}'")
+    # Если данных нет или они устарели, запрашиваем их
+    end_date = now
+    start_date = end_date - timedelta(days=period_years * 365)
+    start_date_str = start_date.strftime('%Y-%m-%d')
+    end_date_str = end_date.strftime('%Y-%m-%d')
 
-    start = now - timedelta(days=period_years * 365)
-    all_data = []
-
-    if timeframe.lower() in ['1m', '10m']:
-        step_days = 10
-    elif timeframe.lower() == '1h':
-        step_days = 30
-    else:
-        step_days = 365
-
-    current_start = start
-    while current_start < now:
-        period_end = min(current_start + timedelta(days=step_days), now)
-        data = fetch_moex_candles(ticker, current_start.strftime('%Y-%m-%d'), period_end.strftime('%Y-%m-%d'), timeframe)
-        if data is not None:
-            all_data.append(data)
-        current_start = period_end + timedelta(days=1)
-
-    if all_data:
-        final_data = pd.concat(all_data, ignore_index=True)
-        final_data = final_data.sort_values('begin').drop_duplicates(subset=['begin'])
-        final_data.to_csv(filename, index=False)
-        print(f"Данные успешно сохранены в '{filename}'")
-        return final_data
-    else:
-        print("Не удалось получить данные")
+    data = fetch_moex_candles(ticker, start_date_str, end_date_str, timeframe)
+    if data is None or data.empty:
+        print(f"Не удалось получить данные для {ticker}")
         return pd.DataFrame()
+
+    # Форматирование данных
+    data = data[['begin', 'open', 'high', 'low', 'close', 'volume']]
+
+    # Не сохраняем файл здесь, возвращаем DataFrame для дальнейшей обработки
+    return data
+
+
+if __name__ == "__main__":
+    # Тестовый запуск
+    df = get_historical_data("SBER", "daily", 2)
+    print(df.head())

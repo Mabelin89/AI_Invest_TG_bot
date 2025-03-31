@@ -81,9 +81,9 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
 
 
 # Функция для расчёта EMA (экспоненциальной скользящей средней)
+# Функция для расчёта EMA
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
-
 
 # Функция для сохранения исторических данных с техническими индикаторами
 def save_historical_data(ticker, timeframe, period_years):
@@ -100,6 +100,7 @@ def save_historical_data(ticker, timeframe, period_years):
         data['SMA_10'] = data['close'].rolling(window=10, min_periods=1).mean()
         data['SMA_20'] = data['close'].rolling(window=20, min_periods=1).mean()
         data['SMA_50'] = data['close'].rolling(window=50, min_periods=1).mean()
+        data['SMA_200'] = data['close'].rolling(window=200, min_periods=1).mean()
         data['EMA_10'] = calculate_ema(data['close'], 10)
         data['EMA_20'] = calculate_ema(data['close'], 20)
         data['EMA_50'] = calculate_ema(data['close'], 50)
@@ -125,9 +126,8 @@ def save_historical_data(ticker, timeframe, period_years):
         data['MACD_signal'] = data['MACD'].rolling(window=9, min_periods=1).mean()
         data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
 
-        # Удаляем ненужные столбцы 'end' и возвращаем индекс как столбец 'date'
+        # Возвращаем индекс как столбец 'date'
         data.reset_index(inplace=True)
-        data = data.drop(columns=['end'])
         data.rename(columns={'begin': 'date'}, inplace=True)
 
         # Сохраняем в CSV
@@ -332,6 +332,8 @@ def plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_tic
     # Основной график: цена, SMA, EMA, Bollinger Bands
     ax1.plot(data['date'], data['close'], label='Close', color='blue')
     ax1.plot(data['date'], data['SMA_20'], label='SMA 20', color='orange', linestyle='--')
+    ax1.plot(data['date'], data['SMA_50'], label='SMA 50', color='purple', linestyle='--')
+    ax1.plot(data['date'], data['SMA_200'], label='SMA 200', color='black', linestyle='--')
     ax1.plot(data['date'], data['EMA_20'], label='EMA 20', color='green', linestyle='--')
     ax1.plot(data['date'], data['BB_upper'], label='BB Upper', color='red', linestyle='-.')
     ax1.plot(data['date'], data['BB_lower'], label='BB Lower', color='red', linestyle='-.')
