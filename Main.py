@@ -1,6 +1,7 @@
 import telebot
 from openai import OpenAI
 import pandas as pd
+import numpy as np
 import re
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import matplotlib.pyplot as plt
@@ -79,17 +80,61 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
             print(f"Ошибка при скачивании {filename}: {str(e)}")
 
 
-# Функция для сохранения исторических данных
+# Функция для расчёта EMA (экспоненциальной скользящей средней)
+def calculate_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+
+# Функция для сохранения исторических данных с техническими индикаторами
 def save_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
         os.makedirs(HISTORICAL_DATA_DIR)
 
     data = get_historical_data(ticker, timeframe, period_years)
     if not data.empty:
+        # Преобразуем 'begin' в дату и устанавливаем как индекс
+        data['begin'] = pd.to_datetime(data['begin'])
+        data.set_index('begin', inplace=True)
+
+        # Добавляем скользящие средние
+        data['SMA_10'] = data['close'].rolling(window=10, min_periods=1).mean()
+        data['SMA_20'] = data['close'].rolling(window=20, min_periods=1).mean()
+        data['SMA_50'] = data['close'].rolling(window=50, min_periods=1).mean()
+        data['EMA_10'] = calculate_ema(data['close'], 10)
+        data['EMA_20'] = calculate_ema(data['close'], 20)
+        data['EMA_50'] = calculate_ema(data['close'], 50)
+
+        # Добавляем RSI
+        delta = data['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+        rs = gain / loss
+        data['RSI_14'] = 100 - (100 / (1 + rs))
+
+        # Добавляем Полосы Боллинджера
+        data['BB_middle'] = data['close'].rolling(window=20, min_periods=1).mean()
+        data['BB_std'] = data['close'].rolling(window=20, min_periods=1).std()
+        data['BB_upper'] = data['BB_middle'] + 2 * data['BB_std']
+        data['BB_lower'] = data['BB_middle'] - 2 * data['BB_std']
+        data = data.drop(columns=['BB_std'])  # Удаляем временный столбец
+
+        # Добавляем MACD
+        ema_12 = calculate_ema(data['close'], 12)
+        ema_26 = calculate_ema(data['close'], 26)
+        data['MACD'] = ema_12 - ema_26
+        data['MACD_signal'] = data['MACD'].rolling(window=9, min_periods=1).mean()
+        data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
+
+        # Удаляем ненужные столбцы 'end' и возвращаем индекс как столбец 'date'
+        data.reset_index(inplace=True)
+        data = data.drop(columns=['end'])
+        data.rename(columns={'begin': 'date'}, inplace=True)
+
+        # Сохраняем в CSV
         filename = f"{ticker}_{timeframe.upper()}_{period_years}Y.csv"
         file_path = os.path.join(HISTORICAL_DATA_DIR, filename)
         data.to_csv(file_path, index=False)
-        print(f"Исторические данные сохранены: {file_path}")
+        print(f"Исторические данные с индикаторами сохранены: {file_path}")
         return data
     return None
 
@@ -265,7 +310,7 @@ def get_plot_keyboard():
 # Функция для построения и отправки графика
 def plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_ticker):
     plt.figure(figsize=(10, 5))
-    plt.plot(pd.to_datetime(data['begin']), data['close'], label=f"{ticker} ({timeframe})")
+    plt.plot(data['date'], data['close'], label=f"{ticker} ({timeframe})")
     plt.title(f"Цена акции {ticker} за {period_years} лет")
     plt.xlabel("Дата")
     plt.ylabel("Цена закрытия")
