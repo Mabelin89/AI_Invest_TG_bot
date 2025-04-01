@@ -1,11 +1,12 @@
 import telebot
 from bot_config import BOT_TOKEN
-from utils import read_file_content
+from utils import read_file_content, read_monthly_macro_content, read_yearly_macro_content
 from company_search import get_company_tickers
 from keyboards import get_timeframe_keyboard, get_plot_keyboard
 from data_processing import save_historical_data, download_reports, analyze_msfo_report
 from plotting import plot_and_send_chart
 import re
+import time
 
 # Инициализация бота
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -71,7 +72,6 @@ def handle_message(message):
                 ask_next_company(chat_id)
                 return
 
-            # tickers — это список кортежей [(tickers, company_name), ...]
             if len(tickers) == 1:
                 ticker_list = tickers[0][0].split(",")
                 if len(ticker_list) == 2:
@@ -172,9 +172,12 @@ def handle_message(message):
                                      f"Данные для {ticker} ({timeframe}, {period_years} лет) сохранены в папку 'historical_data'.")
                     download_reports(ticker, is_preferred, base_ticker)
                     bot.send_message(chat_id, f"Отчеты для {base_ticker} (МСФО и РСБУ) сохранены в папку 'reports'.")
+                    # Анализируем отчёты сразу
+                    analysis_result = analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years)
+                    bot.send_message(chat_id, f"Ключевые показатели для {base_ticker}:\n{analysis_result}")
                     user_states[chat_id]["data"] = data
                     user_states[chat_id]["period_years"] = period_years
-                    bot.send_message(chat_id, "Вывести график цены акции за указанный период?",
+                    bot.send_message(chat_id, "Вывести график цены акции с индикаторами за указанный период?",
                                      reply_markup=get_plot_keyboard())
                 else:
                     bot.send_message(chat_id, f"Не удалось получить данные для {ticker}.")
@@ -195,7 +198,10 @@ def handle_message(message):
 def handle_callback(call):
     chat_id = call.message.chat.id
     if chat_id not in user_states:
-        bot.answer_callback_query(call.id, "Сессия устарела. Начните заново с /start.")
+        try:
+            bot.answer_callback_query(call.id, "Сессия устарела. Начните заново с /start.")
+        except Exception:
+            print(f"Не удалось ответить на callback: {call.id}")
         return
 
     state = user_states[chat_id]["step"]
@@ -204,39 +210,95 @@ def handle_callback(call):
         timeframe = call.data
         user_states[chat_id]["timeframe"] = timeframe
         user_states[chat_id]["step"] = "ask_period"
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"Выбран таймфрейм: {timeframe}. Введите период в годах (например, 1, 2, 5):"
-        )
-        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text=f"Выбран таймфрейм: {timeframe}. Введите период в годах (например, 1, 2, 5):"
+            )
+            bot.answer_callback_query(call.id)
+        except Exception as e:
+            bot.send_message(chat_id, f"Ошибка при выборе таймфрейма: {str(e)}")
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                print(f"Не удалось ответить на callback: {call.id}")
 
     elif state == "ask_period":
         if call.data == "yes_plot":
             ticker = user_states[chat_id]["ticker"]
             base_ticker = user_states[chat_id]["base_ticker"]
             timeframe = user_states[chat_id]["timeframe"]
-            period_years = user_states[chat_id]["period_years"]
+            period_years = user_states[chat_id].get("period_years")
             data = user_states[chat_id]["data"]
-            plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_ticker, bot)
-            ask_next_company(chat_id)
+            if period_years is None:
+                bot.send_message(chat_id, "Ошибка: период не задан. Пожалуйста, начните заново.")
+                ask_next_company(chat_id)
+                try:
+                    bot.answer_callback_query(call.id)
+                except Exception:
+                    print(f"Не удалось ответить на callback: {call.id}")
+                return
+            try:
+                # График с индикаторами
+                plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_ticker, bot)
+                ask_next_company(chat_id)
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    text="Обработка завершена. Укажите следующую компанию."
+                )
+                try:
+                    bot.answer_callback_query(call.id)
+                except Exception:
+                    print(f"Не удалось ответить на callback: {call.id}")
+            except Exception as e:
+                bot.send_message(chat_id, f"Ошибка при выводе графика: {str(e)}")
+                ask_next_company(chat_id)
+                try:
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        text="Произошла ошибка. Укажите следующую компанию."
+                    )
+                    bot.answer_callback_query(call.id)
+                except Exception as api_error:
+                    print(f"Ошибка Telegram API при обработке callback: {str(api_error)}")
         elif call.data == "no_plot":
-            ask_next_company(chat_id)
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text="Обработка завершена."
-        )
-        bot.answer_callback_query(call.id)
+            try:
+                ask_next_company(chat_id)
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    text="Обработка завершена. Укажите следующую компанию."
+                )
+                try:
+                    bot.answer_callback_query(call.id)
+                except Exception:
+                    print(f"Не удалось ответить на callback: {call.id}")
+            except Exception as e:
+                bot.send_message(chat_id, f"Ошибка: {str(e)}")
+                ask_next_company(chat_id)
+                try:
+                    bot.answer_callback_query(call.id)
+                except Exception:
+                    print(f"Не удалось ответить на callback: {call.id}")
 
 
 # Запуск бота
 if __name__ == "__main__":
     companies_df = read_file_content(FILE_PATH)
+    monthly_macro_df = read_monthly_macro_content()
+    yearly_macro_df = read_yearly_macro_content()
     if companies_df is None:
         print(
             "Предупреждение: Не удалось загрузить данные о компаниях. Функционал поиска тикеров может быть ограничен.")
         bot.polling(none_stop=True, timeout=60)
     else:
-        print("Бот запущен с данными о компаниях...")
-        bot.polling(none_stop=True, timeout=60)
+        print("Бот запущен с данными о компаниях и макроэкономическими данными...")
+        while True:
+            try:
+                bot.polling(none_stop=True, timeout=60)
+            except Exception as e:
+                print(f"Ошибка в polling: {str(e)}")
+                time.sleep(5)  # Пауза перед перезапуском

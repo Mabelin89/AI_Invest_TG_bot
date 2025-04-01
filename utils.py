@@ -2,8 +2,10 @@ import pandas as pd
 import os
 import csv
 
-# Глобальная переменная для содержимого файла
+# Глобальные переменные для содержимого файлов
 FILE_CONTENT = None
+MONTHLY_MACRO_CONTENT = None
+YEARLY_MACRO_CONTENT = None
 
 
 # Функция для чтения CSV файла с автоматическим определением разделителя
@@ -15,7 +17,7 @@ def read_csv_file(file_path):
 
         # Определяем разделитель с помощью csv.Sniffer
         with open(file_path, 'r', encoding='utf-8') as file:
-            sample = file.read(1024)  # Читаем первые 1024 байта для анализа
+            sample = file.read(1024)
             sniffer = csv.Sniffer()
             dialect = sniffer.sniff(sample)
             separator = dialect.delimiter
@@ -33,7 +35,7 @@ def read_csv_file(file_path):
         return None
 
 
-# Чтение содержимого файла один раз при запуске
+# Чтение содержимого файла компаний один раз при запуске
 def read_file_content(file_path):
     global FILE_CONTENT
     if FILE_CONTENT is None:
@@ -43,3 +45,27 @@ def read_file_content(file_path):
             print(f"Поддерживается только формат .csv, передан: '{file_path}'")
             FILE_CONTENT = None
     return FILE_CONTENT
+
+
+# Чтение помесячных макроэкономических данных
+def read_monthly_macro_content(file_path="monthly_macro_indicators_russia.csv"):
+    global MONTHLY_MACRO_CONTENT
+    if MONTHLY_MACRO_CONTENT is None:
+        if os.path.exists(file_path):
+            MONTHLY_MACRO_CONTENT = read_csv_file(file_path)
+        else:
+            print(f"Файл '{file_path}' не найден")
+            MONTHLY_MACRO_CONTENT = None
+    return MONTHLY_MACRO_CONTENT
+
+
+# Чтение годовых макроэкономических данных
+def read_yearly_macro_content(file_path="yearly_macro_indicators_russia.csv"):
+    global YEARLY_MACRO_CONTENT
+    if YEARLY_MACRO_CONTENT is None:
+        if os.path.exists(file_path):
+            YEARLY_MACRO_CONTENT = read_csv_file(file_path)
+        else:
+            print(f"Файл '{file_path}' не найден")
+            YEARLY_MACRO_CONTENT = None
+    return YEARLY_MACRO_CONTENT

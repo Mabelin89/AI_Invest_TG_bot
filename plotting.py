@@ -1,69 +1,55 @@
 import matplotlib.pyplot as plt
 import os
+from datetime import datetime
+
 
 def plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_ticker, bot):
-    # Первый график: только цена закрытия
-    plt.figure(figsize=(10, 5))
-    plt.plot(data['date'], data['close'], label=f"{ticker} ({timeframe})")
-    plt.title(f"Цена акции {ticker} за {period_years} лет")
-    plt.xlabel("Дата")
-    plt.ylabel("Цена закрытия")
-    plt.legend()
-    plt.grid()
-    plt.xticks(rotation=45)
-    chart_path = f"{ticker}_{timeframe}_{period_years}Y_chart.png"
-    plt.savefig(chart_path, bbox_inches='tight')
-    plt.close()
+    try:
+        # Создаём график с двумя осями: цена и RSI
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), height_ratios=[3, 1], sharex=True)
 
-    with open(chart_path, 'rb') as photo:
-        bot.send_photo(chat_id, photo)
-    os.remove(chart_path)
+        # График цены и скользящих средних
+        ax1.plot(data['date'], data['close'], label='Close Price', color='blue')
+        ax1.plot(data['date'], data['SMA_10'], label='SMA 10', color='orange', linestyle='--')
+        ax1.plot(data['date'], data['SMA_20'], label='SMA 20', color='green', linestyle='--')
+        ax1.plot(data['date'], data['SMA_50'], label='SMA 50', color='red', linestyle='--')
+        ax1.plot(data['date'], data['EMA_10'], label='EMA 10', color='purple', linestyle='-.')
+        ax1.plot(data['date'], data['EMA_20'], label='EMA 20', color='brown', linestyle='-.')
 
-    # Второй график: цена с индикаторами
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), gridspec_kw={'height_ratios': [3, 1, 1]}, sharex=True)
+        # Полосы Боллинджера
+        ax1.plot(data['date'], data['BB_upper'], label='BB Upper', color='gray', linestyle=':')
+        ax1.plot(data['date'], data['BB_lower'], label='BB Lower', color='gray', linestyle=':')
+        ax1.fill_between(data['date'], data['BB_lower'], data['BB_upper'], color='gray', alpha=0.1)
 
-    # Основной график: цена, SMA, EMA, Bollinger Bands
-    ax1.plot(data['date'], data['close'], label='Close', color='blue')
-    ax1.plot(data['date'], data['SMA_20'], label='SMA 20', color='orange', linestyle='--')
-    ax1.plot(data['date'], data['SMA_50'], label='SMA 50', color='purple', linestyle='--')
-    ax1.plot(data['date'], data['SMA_200'], label='SMA 200', color='black', linestyle='--')
-    ax1.plot(data['date'], data['EMA_20'], label='EMA 20', color='green', linestyle='--')
-    ax1.plot(data['date'], data['BB_upper'], label='BB Upper', color='red', linestyle='-.')
-    ax1.plot(data['date'], data['BB_lower'], label='BB Lower', color='red', linestyle='-.')
-    ax1.fill_between(data['date'], data['BB_upper'], data['BB_lower'], color='red', alpha=0.1)
-    ax1.set_title(f"Технический анализ {ticker} ({timeframe}) за {period_years} лет")
-    ax1.set_ylabel("Цена")
-    ax1.legend(loc='upper left')
-    ax1.grid()
+        ax1.set_title(f"{ticker} Price with Indicators ({timeframe}, {period_years} years)")
+        ax1.set_ylabel("Price (RUB)")
+        ax1.legend(loc='upper left')
+        ax1.grid(True)
 
-    # RSI
-    ax2.plot(data['date'], data['RSI_14'], label='RSI 14', color='purple')
-    ax2.axhline(70, color='red', linestyle='--', alpha=0.5)
-    ax2.axhline(30, color='green', linestyle='--', alpha=0.5)
-    ax2.set_ylabel("RSI")
-    ax2.legend(loc='upper left')
-    ax2.grid()
+        # График RSI
+        ax2.plot(data['date'], data['RSI_14'], label='RSI 14', color='purple')
+        ax2.axhline(70, color='red', linestyle='--', alpha=0.5)
+        ax2.axhline(30, color='green', linestyle='--', alpha=0.5)
+        ax2.set_ylabel("RSI")
+        ax2.set_xlabel("Date")
+        ax2.legend(loc='upper left')
+        ax2.grid(True)
 
-    # MACD
-    ax3.plot(data['date'], data['MACD'], label='MACD', color='blue')
-    ax3.plot(data['date'], data['MACD_signal'], label='Signal', color='orange')
-    ax3.bar(data['date'], data['MACD_histogram'], label='Histogram', color='gray', alpha=0.5)
-    ax3.set_xlabel("Дата")
-    ax3.set_ylabel("MACD")
-    ax3.legend(loc='upper left')
-    ax3.grid()
+        # Настройка отступов
+        plt.tight_layout()
 
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    indicators_chart_path = f"{ticker}_{timeframe}_{period_years}Y_indicators.png"
-    plt.savefig(indicators_chart_path, bbox_inches='tight')
-    plt.close()
+        # Сохраняем график
+        plot_path = f"plot_{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        plt.savefig(plot_path)
+        plt.close()
 
-    with open(indicators_chart_path, 'rb') as photo:
-        bot.send_photo(chat_id, photo)
-    os.remove(indicators_chart_path)
+        # Отправляем график в Telegram
+        with open(plot_path, 'rb') as photo:
+            bot.send_photo(chat_id, photo)
 
-    # Анализ отчетов и отправка показателей
-    from data_processing import analyze_msfo_report
-    msfo_analysis = analyze_msfo_report(ticker, base_ticker, chat_id, bot)
-    bot.send_message(chat_id, f"Ключевые показатели для {base_ticker}:\n{msfo_analysis}")
+        # Удаляем временный файл
+        os.remove(plot_path)
+        print(f"График для {ticker} отправлен и удалён: {plot_path}")
+    except Exception as e:
+        print(f"Ошибка в plot_and_send_chart для {ticker}: {str(e)}")
+        bot.send_message(chat_id, f"Не удалось отправить график: {str(e)}")

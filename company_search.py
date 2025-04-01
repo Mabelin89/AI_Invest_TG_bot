@@ -12,8 +12,7 @@ def get_company_tickers(company_name, companies_df, chat_id, bot):
     # Проверяем структуру DataFrame
     if companies_df is not None:
         if len(companies_df.columns) == 1 and ',' in companies_df.columns[0]:
-            # Если заголовок объединён, разделяем его
-            companies_df.columns = ['ticker,official_name']  # Временное имя
+            companies_df.columns = ['ticker,official_name']
             companies_df[['ticker', 'official_name']] = companies_df['ticker,official_name'].str.split(',', expand=True)
             companies_df = companies_df.drop(columns=['ticker,official_name'])
         ticker_col = 'ticker' if 'ticker' in companies_df.columns else companies_df.columns[0]
@@ -93,12 +92,11 @@ def get_company_tickers(company_name, companies_df, chat_id, bot):
             for company_tickers in ticker_str.split('|'):
                 ticker_list = company_tickers.split(',')
                 first_ticker = ticker_list[0]
-                # Ищем имя компании в DataFrame
                 matching_rows = companies_df[companies_df[ticker_col] == first_ticker]
                 if not matching_rows.empty:
                     company_name_in_file = matching_rows[name_col].iloc[0]
                 else:
-                    company_name_in_file = first_ticker  # Fallback на тикер
+                    company_name_in_file = first_ticker
                 validated_tickers.append((company_tickers, company_name_in_file))
             return validated_tickers if validated_tickers else "Извините, компания не найдена. Попробуйте скорректировать запрос."
         return "Извините, компания не найдена. Попробуйте скорректировать запрос."
