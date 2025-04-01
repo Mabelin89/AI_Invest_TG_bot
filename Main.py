@@ -2,7 +2,7 @@ import telebot
 from bot_config import BOT_TOKEN
 from utils import read_file_content, read_monthly_macro_content, read_yearly_macro_content
 from company_search import get_company_tickers
-from keyboards import get_timeframe_keyboard, get_plot_keyboard
+from keyboards import get_timeframe_keyboard, get_plot_keyboard, get_forecast_menu_keyboard
 from data_processing import save_historical_data, download_reports, analyze_msfo_report
 from plotting import plot_and_send_chart
 import re
@@ -84,13 +84,13 @@ def handle_message(message):
                     bot.send_message(chat_id, "Выберите тип акции:\n1 — обычная\n2 — привилегированная")
                 else:
                     user_states[chat_id] = {
-                        "step": "ask_timeframe",
+                        "step": "show_menu",
                         "ticker": ticker_list[0],
                         "base_ticker": ticker_list[0],
                         "company": company_name
                     }
                     bot.send_message(chat_id, f"Тикер: {ticker_list[0]}")
-                    bot.send_message(chat_id, "Выберите таймфрейм:", reply_markup=get_timeframe_keyboard())
+                    bot.send_message(chat_id, "Выберите действие:", reply_markup=get_forecast_menu_keyboard())
             else:
                 options = []
                 ticker_options = []
@@ -120,14 +120,15 @@ def handle_message(message):
                 return
 
             user_states[chat_id] = {
-                "step": "ask_timeframe",
+                "step": "show_menu",
                 "ticker": selected_ticker,
                 "base_ticker": base_ticker,
                 "is_preferred": is_preferred,
                 "company": user_states[chat_id]["company"]
             }
             bot.send_message(chat_id, f"Тикер: {selected_ticker}")
-            bot.send_message(chat_id, "Выберите таймфрейм:", reply_markup=get_timeframe_keyboard())
+            bot.send_message(chat_id, "Выберите действие:", reply_markup=get_forecast_menu_keyboard())
+            print(f"Переход в show_menu для {selected_ticker}")
 
         elif state == "choose_company":
             choice = user_message.strip()
@@ -145,13 +146,13 @@ def handle_message(message):
                         bot.send_message(chat_id, "Выберите тип акции:\n1 — обычная\n2 — привилегированная")
                     else:
                         user_states[chat_id] = {
-                            "step": "ask_timeframe",
+                            "step": "show_menu",
                             "ticker": ticker_list[0],
                             "base_ticker": ticker_list[0],
                             "company": user_states[chat_id]["original_query"]
                         }
                         bot.send_message(chat_id, f"Тикер: {ticker_list[0]}")
-                        bot.send_message(chat_id, "Выберите таймфрейм:", reply_markup=get_timeframe_keyboard())
+                        bot.send_message(chat_id, "Выберите действие:", reply_markup=get_forecast_menu_keyboard())
                 else:
                     bot.send_message(chat_id, "Пожалуйста, выберите номер из списка.")
             except ValueError:
@@ -172,13 +173,11 @@ def handle_message(message):
                                      f"Данные для {ticker} ({timeframe}, {period_years} лет) сохранены в папку 'historical_data'.")
                     download_reports(ticker, is_preferred, base_ticker)
                     bot.send_message(chat_id, f"Отчеты для {base_ticker} (МСФО и РСБУ) сохранены в папку 'reports'.")
-                    # Анализируем отчёты сразу
                     analysis_result = analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years)
                     bot.send_message(chat_id, f"Ключевые показатели для {base_ticker}:\n{analysis_result}")
                     user_states[chat_id]["data"] = data
                     user_states[chat_id]["period_years"] = period_years
-                    bot.send_message(chat_id, "Вывести график цены акции с индикаторами за указанный период?",
-                                     reply_markup=get_plot_keyboard())
+                    bot.send_message(chat_id, "Вывести график с индикаторами?", reply_markup=get_plot_keyboard())
                 else:
                     bot.send_message(chat_id, f"Не удалось получить данные для {ticker}.")
                     ask_next_company(chat_id)
@@ -206,7 +205,54 @@ def handle_callback(call):
 
     state = user_states[chat_id]["step"]
 
-    if state == "ask_timeframe":
+    if state == "show_menu":
+        if call.data == "short_term_forecast":
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text="Функция краткосрочного прогноза в разработке."
+            )
+            ask_next_company(chat_id)
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                print(f"Не удалось ответить на callback: {call.id}")
+        elif call.data == "medium_term_forecast":
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text="Функция среднесрочного прогноза в разработке."
+            )
+            ask_next_company(chat_id)
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                print(f"Не удалось ответить на callback: {call.id}")
+        elif call.data == "long_term_forecast":
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text="Функция долгосрочного прогноза в разработке."
+            )
+            ask_next_company(chat_id)
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                print(f"Не удалось ответить на callback: {call.id}")
+        elif call.data == "diagnostics":
+            user_states[chat_id]["step"] = "ask_timeframe"
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text="Выберите таймфрейм для диагностики:"
+            )
+            bot.send_message(chat_id, "Выберите таймфрейм:", reply_markup=get_timeframe_keyboard())
+            try:
+                bot.answer_callback_query(call.id)
+            except Exception:
+                print(f"Не удалось ответить на callback: {call.id}")
+
+    elif state == "ask_timeframe":
         timeframe = call.data
         user_states[chat_id]["timeframe"] = timeframe
         user_states[chat_id]["step"] = "ask_period"
@@ -240,7 +286,6 @@ def handle_callback(call):
                     print(f"Не удалось ответить на callback: {call.id}")
                 return
             try:
-                # График с индикаторами
                 plot_and_send_chart(chat_id, ticker, timeframe, period_years, data, base_ticker, bot)
                 ask_next_company(chat_id)
                 bot.edit_message_text(
@@ -301,4 +346,4 @@ if __name__ == "__main__":
                 bot.polling(none_stop=True, timeout=60)
             except Exception as e:
                 print(f"Ошибка в polling: {str(e)}")
-                time.sleep(5)  # Пауза перед перезапуском
+                time.sleep(5)

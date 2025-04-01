@@ -7,64 +7,75 @@ from openai import OpenAI
 from moex_parser import get_historical_data
 from utils import read_csv_file, read_monthly_macro_content, read_yearly_macro_content
 
-# Папки для отчетов и исторических данных
 REPORTS_DIR = "reports"
 HISTORICAL_DATA_DIR = "historical_data"
 
-# Инициализация клиента LLM
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-needed")
 
-# Функция для расчёта EMA
+
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
-# Функция для сохранения исторических данных с индикаторами
+
 def save_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
         os.makedirs(HISTORICAL_DATA_DIR)
 
     data = get_historical_data(ticker, timeframe, period_years)
-    if not data.empty:
-        data['begin'] = pd.to_datetime(data['begin'])
-        data.set_index('begin', inplace=True)
+    if data is None or data.empty:
+        print(f"Ошибка: данные для {ticker} ({timeframe}, {period_years} лет) не получены из moex_parser")
+        return None
 
-        data['SMA_10'] = data['close'].rolling(window=10, min_periods=1).mean()
-        data['SMA_20'] = data['close'].rolling(window=20, min_periods=1).mean()
-        data['SMA_50'] = data['close'].rolling(window=50, min_periods=1).mean()
-        data['SMA_200'] = data['close'].rolling(window=200, min_periods=1).mean()
-        data['EMA_10'] = calculate_ema(data['close'], 10)
-        data['EMA_20'] = calculate_ema(data['close'], 20)
-        data['EMA_50'] = calculate_ema(data['close'], 50)
+    print(f"Получены данные для {ticker} ({timeframe}): {len(data)} строк, столбцы: {list(data.columns)}")
 
-        delta = data['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
-        rs = gain / loss
-        data['RSI_14'] = 100 - (100 / (1 + rs))
+    # Используем 'date' вместо 'begin'
+    data['date'] = pd.to_datetime(data['date'])
+    data.set_index('date', inplace=True)
 
-        data['BB_middle'] = data['close'].rolling(window=20, min_periods=1).mean()
-        data['BB_std'] = data['close'].rolling(window=20, min_periods=1).std()
-        data['BB_upper'] = data['BB_middle'] + 2 * data['BB_std']
-        data['BB_lower'] = data['BB_middle'] - 2 * data['BB_std']
-        data = data.drop(columns=['BB_std'])
+    # Скользящие средние
+    data['SMA_10'] = data['close'].rolling(window=10, min_periods=1).mean()
+    data['SMA_20'] = data['close'].rolling(window=20, min_periods=1).mean()
+    data['SMA_50'] = data['close'].rolling(window=50, min_periods=1).mean()
+    data['EMA_10'] = calculate_ema(data['close'], 10)
+    data['EMA_20'] = calculate_ema(data['close'], 20)
+    data['EMA_50'] = calculate_ema(data['close'], 50)
 
-        ema_12 = calculate_ema(data['close'], 12)
-        ema_26 = calculate_ema(data['close'], 26)
-        data['MACD'] = ema_12 - ema_26
-        data['MACD_signal'] = data['MACD'].rolling(window=9, min_periods=1).mean()
-        data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
+    # RSI
+    delta = data['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+    rs = gain / loss
+    data['RSI_14'] = 100 - (100 / (1 + rs))
 
-        data.reset_index(inplace=True)
-        data.rename(columns={'begin': 'date'}, inplace=True)
+    # Bollinger Bands
+    data['BB_middle'] = data['close'].rolling(window=20, min_periods=1).mean()
+    data['BB_std'] = data['close'].rolling(window=20, min_periods=1).std()
+    data['BB_upper'] = data['BB_middle'] + 2 * data['BB_std']
+    data['BB_lower'] = data['BB_middle'] - 2 * data['BB_std']
+    data = data.drop(columns=['BB_std'])
 
-        filename = f"{ticker}_{timeframe.upper()}_{period_years}Y.csv"
-        file_path = os.path.join(HISTORICAL_DATA_DIR, filename)
-        data.to_csv(file_path, index=False)
-        print(f"Исторические данные с индикаторами сохранены: {file_path}")
-        return data
-    return None
+    # MACD
+    ema_12 = calculate_ema(data['close'], 12)
+    ema_26 = calculate_ema(data['close'], 26)
+    data['MACD'] = ema_12 - ema_26
+    data['MACD_signal'] = calculate_ema(data['MACD'], 9)
+    data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
 
-# Функция для скачивания отчетов
+    # Stochastic Oscillator
+    low_14 = data['close'].rolling(window=14, min_periods=1).min()
+    high_14 = data['close'].rolling(window=14, min_periods=1).max()
+    data['Stoch_K'] = 100 * (data['close'] - low_14) / (high_14 - low_14)
+    data['Stoch_D'] = data['Stoch_K'].rolling(window=3, min_periods=1).mean()
+
+    data.reset_index(inplace=True)
+
+    filename = f"{ticker}_{timeframe.upper()}_{period_years}Y.csv"
+    file_path = os.path.join(HISTORICAL_DATA_DIR, filename)
+    data.to_csv(file_path, index=False)
+    print(f"Исторические данные с индикаторами сохранены: {file_path}, столбцы: {list(data.columns)}")
+    return data
+
+
 def download_reports(ticker, is_preferred=False, base_ticker=None):
     if not os.path.exists(REPORTS_DIR):
         os.makedirs(REPORTS_DIR)
@@ -93,7 +104,7 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
         except Exception as e:
             print(f"Ошибка при скачивании {filename}: {str(e)}")
 
-# Функция для анализа отчетов с учетом макроэкономики
+
 def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years):
     msfo_file = os.path.join(REPORTS_DIR, f"{base_ticker}-МСФО-годовые.csv")
     rsbu_file = os.path.join(REPORTS_DIR, f"{base_ticker}-РСБУ-годовые.csv")
@@ -184,7 +195,8 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years):
                     yearly_macro_content=yearly_macro_content if yearly_macro_content else "Отсутствует",
                     period_years=period_years
                 )},
-                {"role": "user", "content": f"Анализируй отчеты для тикера {base_ticker} с учетом макроэкономических данных."}
+                {"role": "user",
+                 "content": f"Анализируй отчеты для тикера {base_ticker} с учетом макроэкономических данных."}
             ],
             max_tokens=10000,
             temperature=0.1
