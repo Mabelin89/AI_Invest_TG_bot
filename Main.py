@@ -5,6 +5,7 @@ from company_search import get_company_tickers
 from keyboards import get_timeframe_keyboard, get_plot_keyboard, get_forecast_menu_keyboard
 from data_processing import save_historical_data, download_reports, analyze_msfo_report
 from plotting import plot_and_send_chart
+from forecast import short_term_forecast
 import re
 import time
 
@@ -196,6 +197,7 @@ def handle_message(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     chat_id = call.message.chat.id
+
     if chat_id not in user_states:
         try:
             bot.answer_callback_query(call.id, "Сессия устарела. Начните заново с /start.")
@@ -207,11 +209,10 @@ def handle_callback(call):
 
     if state == "show_menu":
         if call.data == "short_term_forecast":
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                text="Функция краткосрочного прогноза в разработке."
-            )
+            ticker = user_states[chat_id]["ticker"]
+            base_ticker = user_states[chat_id]["base_ticker"]
+            is_preferred = user_states[chat_id]["is_preferred"]
+            short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot)
             ask_next_company(chat_id)
             try:
                 bot.answer_callback_query(call.id)

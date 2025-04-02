@@ -17,6 +17,27 @@ def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
 
+def calculate_adx(high, low, close, period):
+    # Расчёт ADX
+    delta_high = high.diff()
+    delta_low = low.diff()
+    plus_dm = np.where((delta_high > delta_low) & (delta_high > 0), delta_high, 0)
+    minus_dm = np.where((delta_low > delta_high) & (delta_low > 0), delta_low, 0)
+
+    tr = pd.concat([
+        high - low,
+        abs(high - close.shift()),
+        abs(low - close.shift())
+    ], axis=1).max(axis=1)
+
+    atr = tr.rolling(window=period, min_periods=1).mean()
+    plus_di = 100 * pd.Series(plus_dm).rolling(window=period, min_periods=1).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm).rolling(window=period, min_periods=1).mean() / atr
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period, min_periods=1).mean()
+    return adx
+
+
 def save_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
         os.makedirs(HISTORICAL_DATA_DIR)
@@ -27,25 +48,52 @@ def save_historical_data(ticker, timeframe, period_years):
         return None
 
     print(f"Получены данные для {ticker} ({timeframe}): {len(data)} строк, столбцы: {list(data.columns)}")
-
-    # Используем 'date' вместо 'begin'
     data['date'] = pd.to_datetime(data['date'])
     data.set_index('date', inplace=True)
 
+    # Определение параметров в зависимости от таймфрейма и горизонта
+    if timeframe.lower() in ['1h', '4h', 'daily']:  # Краткосрочная торговля
+        sma_periods = [10, 20, 50]
+        ema_periods = [10, 20, 50]
+        macd_fast, macd_slow, macd_signal = 12, 26, 9
+        adx_period = 14
+        rsi_period = 14
+        stoch_k, stoch_d, stoch_smooth = 14, 3, 3
+    elif timeframe.lower() in ['weekly']:  # Среднесрочная торговля
+        sma_periods = [50, 100, 200]
+        ema_periods = [50, 100, 200]
+        macd_fast, macd_slow, macd_signal = 24, 52, 9
+        adx_period = 20
+        rsi_period = 21
+        stoch_k, stoch_d, stoch_smooth = 21, 5, 5
+    elif timeframe.lower() in ['monthly', 'quarterly']:  # Долгосрочные инвестиции
+        sma_periods = [200]
+        ema_periods = [200]
+        macd_fast, macd_slow, macd_signal = 50, 200, 9
+        adx_period = 50
+        rsi_period = 50
+        stoch_k, stoch_d, stoch_smooth = 50, 10, 10
+    else:
+        # По умолчанию краткосрочные параметры
+        sma_periods = [10, 20, 50]
+        ema_periods = [10, 20, 50]
+        macd_fast, macd_slow, macd_signal = 12, 26, 9
+        adx_period = 14
+        rsi_period = 14
+        stoch_k, stoch_d, stoch_smooth = 14, 3, 3
+
     # Скользящие средние
-    data['SMA_10'] = data['close'].rolling(window=10, min_periods=1).mean()
-    data['SMA_20'] = data['close'].rolling(window=20, min_periods=1).mean()
-    data['SMA_50'] = data['close'].rolling(window=50, min_periods=1).mean()
-    data['EMA_10'] = calculate_ema(data['close'], 10)
-    data['EMA_20'] = calculate_ema(data['close'], 20)
-    data['EMA_50'] = calculate_ema(data['close'], 50)
+    for period in sma_periods:
+        data[f'SMA_{period}'] = data['close'].rolling(window=period, min_periods=1).mean()
+    for period in ema_periods:
+        data[f'EMA_{period}'] = calculate_ema(data['close'], period)
 
     # RSI
     delta = data['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period, min_periods=1).mean()
     rs = gain / loss
-    data['RSI_14'] = 100 - (100 / (1 + rs))
+    data[f'RSI_{rsi_period}'] = 100 - (100 / (1 + rs))
 
     # Bollinger Bands
     data['BB_middle'] = data['close'].rolling(window=20, min_periods=1).mean()
@@ -55,17 +103,31 @@ def save_historical_data(ticker, timeframe, period_years):
     data = data.drop(columns=['BB_std'])
 
     # MACD
-    ema_12 = calculate_ema(data['close'], 12)
-    ema_26 = calculate_ema(data['close'], 26)
-    data['MACD'] = ema_12 - ema_26
-    data['MACD_signal'] = calculate_ema(data['MACD'], 9)
+    ema_fast = calculate_ema(data['close'], macd_fast)
+    ema_slow = calculate_ema(data['close'], macd_slow)
+    data['MACD'] = ema_fast - ema_slow
+    data['MACD_signal'] = calculate_ema(data['MACD'], macd_signal)
     data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
 
     # Stochastic Oscillator
-    low_14 = data['close'].rolling(window=14, min_periods=1).min()
-    high_14 = data['close'].rolling(window=14, min_periods=1).max()
-    data['Stoch_K'] = 100 * (data['close'] - low_14) / (high_14 - low_14)
-    data['Stoch_D'] = data['Stoch_K'].rolling(window=3, min_periods=1).mean()
+    low_n = data['low'].rolling(window=stoch_k, min_periods=1).min()
+    high_n = data['high'].rolling(window=stoch_k, min_periods=1).max()
+    data['Stoch_K'] = 100 * (data['close'] - low_n) / (high_n - low_n)
+    data['Stoch_D'] = data['Stoch_K'].rolling(window=stoch_d, min_periods=1).mean()
+    data['Stoch_Slow'] = data['Stoch_D'].rolling(window=stoch_smooth, min_periods=1).mean()
+
+    # OBV (On-Balance Volume)
+    data['OBV'] = np.where(data['close'] > data['close'].shift(1), data['volume'],
+                           np.where(data['close'] < data['close'].shift(1), -data['volume'], 0)).cumsum()
+
+    # VWAP (Volume Weighted Average Price) - рассчитываем как кумулятивный VWAP
+    data['Cum_Volume'] = data['volume'].cumsum()
+    data['Cum_Vol_Price'] = (data['close'] * data['volume']).cumsum()
+    data['VWAP'] = data['Cum_Vol_Price'] / data['Cum_Volume']
+    data = data.drop(columns=['Cum_Volume', 'Cum_Vol_Price'])
+
+    # ADX (Average Directional Index)
+    data['ADX'] = calculate_adx(data['high'], data['low'], data['close'], adx_period)
 
     data.reset_index(inplace=True)
 
