@@ -1,6 +1,7 @@
 import pandas as pd
 from openai import OpenAI
 import os
+from datetime import datetime
 from data_processing import save_historical_data, download_reports, read_csv_file, read_monthly_macro_content, read_yearly_macro_content
 import re
 
@@ -8,11 +9,17 @@ client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-needed")
 
 def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
     """
-    Генерирует краткосрочный прогноз (1-3 месяца) для акции с таймфреймом 4 часа за 1 год.
+    Генерирует краткосрочный прогноз (1-3 месяца) для акции с таймфреймом 'weekly' за 1 год.
     Использует исторические данные, индикаторы, финансовые и макроэкономические показатели.
+    Сохраняет промпт в папку 'prompts' в текстовом формате.
     """
-    timeframe = "4h"
+    timeframe = "weekly"
     period_years = 1
+
+    # Создание папки для промптов, если её нет
+    prompts_dir = os.path.join(os.getcwd(), "prompts")
+    if not os.path.exists(prompts_dir):
+        os.makedirs(prompts_dir)
 
     # Получение исторических данных с индикаторами
     data = save_historical_data(ticker, timeframe, period_years)
@@ -50,19 +57,19 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
         yearly_macro_df = yearly_macro_df[yearly_macro_df['Год'] >= 2024]
         yearly_macro_content = yearly_macro_df.to_string(index=False)
 
-    # Выборка индикаторов для краткосрочного прогноза
-    indicators = data[['date', 'close', 'volume', 'SMA_10', 'SMA_20', 'SMA_50',
-                      'EMA_10', 'EMA_20', 'EMA_50', 'MACD', 'MACD_signal',
-                      'MACD_histogram', 'ADX', 'RSI_14', 'Stoch_K', 'Stoch_D',
-                      'Stoch_Slow', 'OBV', 'VWAP']].tail(50).to_string(index=False)  # Последние 50 точек для анализа
+    # Выборка индикаторов для краткосрочного прогноза (weekly)
+    indicators = data[['date', 'close', 'volume', 'SMA_50', 'SMA_100', 'SMA_200',
+                      'EMA_50', 'EMA_100', 'EMA_200', 'MACD', 'MACD_signal',
+                      'MACD_histogram', 'ADX', 'RSI_21', 'Stoch_K', 'Stoch_D',
+                      'Stoch_Slow', 'OBV', 'VWAP']].tail(50).to_string(index=False)  # Последние 50 недель
 
     bot.send_message(chat_id, "Пожалуйста подождите, формируется краткосрочный прогноз через LLM.")
 
     # Формирование запроса к LLM
-    system_message = """
-Ты финансовый аналитик, специализирующийся на краткосрочных прогнозах (1-3 месяца). Тебе предоставлены данные акции за последний год с таймфреймом 4 часа, финансовые показатели и макроэкономические данные России. Используй эти данные для формирования прогноза движения цены акции.
+    system_message_template = """
+Ты финансовый аналитик, специализирующийся на краткосрочных прогнозах (1-3 месяца). Тебе предоставлены данные акции за последний год с таймфреймом 'weekly', финансовые показатели и макроэкономические данные России. Используй эти данные для формирования прогноза движения цены акции.
 
-Исторические данные с индикаторами (последние 50 точек, таймфрейм 4 часа):
+Исторические данные с индикаторами (последние 50 точек, таймфрейм 'weekly'):
 {indicators}
 
 Финансовые показатели МСФО:
@@ -78,12 +85,12 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
 {yearly_macro_content}
 
 Индикаторы:
-- SMA: 10, 20, 50
-- EMA: 10, 20, 50
-- MACD: (12, 26, 9)
-- ADX: 14
-- RSI: 14
-- Stochastic: (14, 3, 3)
+- SMA: 50, 100, 200
+- EMA: 50, 100, 200
+- MACD: (24, 52, 9)
+- ADX: 20
+- RSI: 21
+- Stochastic: (21, 5, 5)
 - OBV, VWAP
 
 Задача:
@@ -106,20 +113,31 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
 - Опирайся только на предоставленные данные.
 - Ограничь ответ 500 токенов.
 """
+    # Формируем полный промпт
+    system_message = system_message_template.format(
+        indicators=indicators,
+        msfo_content=msfo_content if msfo_content else "Отсутствует",
+        rsbu_content=rsbu_content if rsbu_content else "Отсутствует",
+        monthly_macro_content=monthly_macro_content if monthly_macro_content else "Отсутствует",
+        yearly_macro_content=yearly_macro_content if yearly_macro_content else "Отсутствует"
+    )
+
+    # Сохранение промпта в файл
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    prompt_filename = f"prompt_{ticker}_{timestamp}.txt"
+    prompt_filepath = os.path.join(prompts_dir, prompt_filename)
+    with open(prompt_filepath, "w", encoding="utf-8") as f:
+        f.write(system_message)
+    print(f"Промпт сохранён в файл: {prompt_filepath}")
+
     try:
         response = client.chat.completions.create(
             model="deepseek-r1-distill-qwen-14b",
             messages=[
-                {"role": "system", "content": system_message.format(
-                    indicators=indicators,
-                    msfo_content=msfo_content if msfo_content else "Отсутствует",
-                    rsbu_content=rsbu_content if rsbu_content else "Отсутствует",
-                    monthly_macro_content=monthly_macro_content if monthly_macro_content else "Отсутствует",
-                    yearly_macro_content=yearly_macro_content if yearly_macro_content else "Отсутствует"
-                )},
+                {"role": "system", "content": system_message},
                 {"role": "user", "content": f"Сделай краткосрочный прогноз для акции {ticker}."}
             ],
-            max_tokens=500,
+            max_tokens=50000,
             temperature=0.3
         )
         raw_response = response.choices[0].message.content.strip()
