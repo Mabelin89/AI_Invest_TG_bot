@@ -7,7 +7,7 @@ import re
 
 client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-needed")
 
-def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
+def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=False):
     """
     Генерирует краткосрочный прогноз (1-3 месяца) для акции с таймфреймом 'weekly' за 1 год.
     Использует исторические данные, индикаторы, финансовые и макроэкономические показатели.
@@ -15,6 +15,10 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
     """
     timeframe = "weekly"
     period_years = 1
+
+    # Если base_ticker не указан, используем ticker
+    if base_ticker is None:
+        base_ticker = ticker
 
     # Создание папки для промптов, если её нет
     prompts_dir = os.path.join(os.getcwd(), "prompts")
@@ -61,12 +65,12 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
     indicators = data[['date', 'close', 'volume', 'SMA_50', 'SMA_100', 'SMA_200',
                       'EMA_50', 'EMA_100', 'EMA_200', 'MACD', 'MACD_signal',
                       'MACD_histogram', 'ADX', 'RSI_21', 'Stoch_K', 'Stoch_D',
-                      'Stoch_Slow', 'OBV', 'VWAP']].tail(50).to_string(index=False)  # Последние 50 недель
+                      'Stoch_Slow', 'OBV', 'VWAP']].tail(50).to_string(index=False)
 
     bot.send_message(chat_id, "Пожалуйста подождите, формируется краткосрочный прогноз через LLM.")
 
     # Формирование запроса к LLM
-    system_message_template = """
+    system_message_template = f"""
 Ты финансовый аналитик, специализирующийся на краткосрочных прогнозах (1-3 месяца). Тебе предоставлены данные акции за последний год с таймфреймом 'weekly', финансовые показатели и макроэкономические данные России. Используй эти данные для формирования прогноза движения цены акции.
 
 Исторические данные с индикаторами (последние 50 точек, таймфрейм 'weekly'):
@@ -103,15 +107,20 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
    - Укажи направление (рост, падение, боковик).
    - Дай вероятность (в %) для основного сценария.
    - Предложи ключевые уровни поддержки и сопротивления.
-5. Верни результат в формате:
+5. Дай рекомендацию по действиям с акцией на основе всех данных (исторических, финансовых, макроэкономических): 
+   - Выбери одно из: Активно продавать, Продавать, Держать, Покупать, Активно покупать.
+6. Дай отдельную рекомендацию по действиям с акцией на основе наиболее важных индикаторов (ADX, RSI, MACD, Stochastic), обосновав выбор.
+7. Верни результат в формате:
    - "Прогноз: [направление] (вероятность X%)"
    - "Поддержка: [уровень], Сопротивление: [уровень]"
+   - "Рекомендация (все данные): [действие]"
+   - "Рекомендация (индикаторы): [действие] — [обоснование]"
    - "Комментарий: [краткое обоснование с учётом индикаторов, финансов и макроэкономики]"
    Раздели строки переносом.
 
 Правила:
 - Опирайся только на предоставленные данные.
-- Ограничь ответ 500 токенов.
+- Ограничь ответ 500 токенов, но входной промпт может быть до 50,000 токенов для поддержки размышлений.
 """
     # Формируем полный промпт
     system_message = system_message_template.format(
@@ -137,8 +146,9 @@ def short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot):
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": f"Сделай краткосрочный прогноз для акции {ticker}."}
             ],
-            max_tokens=50000,
+            max_tokens=50990,
             temperature=0.3
+            # Примечание: max_prompt_tokens=50000 не поддерживается в текущем API, предполагается, что модель сама обработает до 50,000 токенов на входе
         )
         raw_response = response.choices[0].message.content.strip()
         result = re.sub(r'<think>.*?</think>\s*|<think>.*$|</think>\s*', '', raw_response, flags=re.DOTALL).strip()

@@ -53,7 +53,6 @@ def get_company_tickers(company_name, companies_df, chat_id, bot):
 - ВЫВОДИ ТОЛЬКО ТИКЕРЫ ИЛИ СООБЩЕНИЕ ОБ ОШИБКЕ — НИКАКОГО ТЕКСТА, ТЕГОВ ИЛИ РАССУЖДЕНИЙ.
 - СТРОГО ЗАПРЕЩЕНО ДОБАВЛЯТЬ <think>, <reasoning> ИЛИ ЛЮБЫЕ ОБЪЯСНЕНИЯ.
 - НЕ ВКЛЮЧАЙ ПОВТОРЯЮЩИЕСЯ ТИКЕРЫ.
-- Ограничь ответ 50 токенов.
 """
     try:
         response = client.chat.completions.create(

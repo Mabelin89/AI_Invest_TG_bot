@@ -211,13 +211,15 @@ def handle_callback(call):
         if call.data == "short_term_forecast":
             ticker = user_states[chat_id]["ticker"]
             base_ticker = user_states[chat_id]["base_ticker"]
-            is_preferred = user_states[chat_id]["is_preferred"]
-            short_term_forecast(ticker, base_ticker, is_preferred, chat_id, bot)
+            is_preferred = user_states[chat_id].get("is_preferred", False)  # Безопасное получение
+            # Исправленный порядок аргументов
+            short_term_forecast(ticker, chat_id, bot, base_ticker, is_preferred)
             ask_next_company(chat_id)
             try:
                 bot.answer_callback_query(call.id)
             except Exception:
                 print(f"Не удалось ответить на callback: {call.id}")
+
         elif call.data == "medium_term_forecast":
             bot.edit_message_text(
                 chat_id=chat_id,
