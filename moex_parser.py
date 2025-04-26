@@ -7,7 +7,6 @@ import os
 # Константа для директории
 HISTORICAL_DATA_DIR = "historical_data"
 
-
 def fetch_moex_candles(ticker, start_date, end_date, timeframe):
     timeframe_map = {
         '1m': 1,      # 1 минута
@@ -37,7 +36,17 @@ def fetch_moex_candles(ticker, start_date, end_date, timeframe):
             if df.empty:
                 print(f"Данные для {ticker} ({timeframe}) пусты")
                 return None
-            print(f"Успешно получены данные для {ticker} ({timeframe}): {len(df)} строк")
+            # Проверка наличия необходимых столбцов
+            required_columns = ['begin', 'high', 'low', 'open', 'close', 'volume']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                print(f"Ошибка: в данных для {ticker} ({timeframe}) отсутствуют столбцы: {missing_columns}")
+                return None
+            # Проверка на NaN в high и low
+            if df[['high', 'low']].isna().any().any():
+                print(f"Предупреждение: найдены NaN в high или low для {ticker} ({timeframe}), заполняются close")
+                df[['high', 'low']] = df[['high', 'low']].fillna(df['close'])
+            print(f"Успешно получены данные для {ticker} ({timeframe}): {len(df)} строк, столбцы: {list(df.columns)}")
             return df
         else:
             print(f"Ошибка запроса для {ticker} ({timeframe}) за {start_date} - {end_date}: статус {response.status_code}, текст: {response.text[:100]}")
@@ -45,7 +54,6 @@ def fetch_moex_candles(ticker, start_date, end_date, timeframe):
     except Exception as e:
         print(f"Ошибка при запросе данных MOEX для {ticker} ({timeframe}): {str(e)}")
         return None
-
 
 def aggregate_to_4h(data):
     try:
@@ -65,7 +73,6 @@ def aggregate_to_4h(data):
     except Exception as e:
         print(f"Ошибка при агрегации 4-часовых свечей: {str(e)}")
         return pd.DataFrame()
-
 
 def is_data_outdated(file_path, timeframe, period_years):
     if not os.path.exists(file_path):
@@ -87,7 +94,6 @@ def is_data_outdated(file_path, timeframe, period_years):
     threshold = timeframe_thresholds.get(timeframe.lower(), 24 * 3600)
     return (now - mod_time).total_seconds() >= threshold
 
-
 def get_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
         os.makedirs(HISTORICAL_DATA_DIR)
@@ -102,7 +108,15 @@ def get_historical_data(ticker, timeframe, period_years):
 
     if os.path.exists(file_path) and not is_data_outdated(file_path, timeframe, period_years):
         print(f"Данные в '{file_path}' актуальны, загрузка из файла")
-        return pd.read_csv(file_path)
+        df = pd.read_csv(file_path)
+        # Проверка столбцов в загруженном файле
+        required_columns = ['date', 'high', 'low', 'open', 'close', 'volume']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            print(f"Ошибка: в файле {file_path} отсутствуют столбцы: {missing_columns}")
+            os.remove(file_path)  # Удаляем некорректный файл
+            return get_historical_data(ticker, timeframe, period_years)  # Повторный запрос
+        return df
 
     end_date = now
     start_date = end_date - timedelta(days=period_years * 365)
@@ -125,9 +139,18 @@ def get_historical_data(ticker, timeframe, period_years):
         data = data[['begin', 'high', 'low', 'open', 'close', 'volume']]
         data.rename(columns={'begin': 'date'}, inplace=True)
 
+    # Проверка валидности high и low
+    if not data.empty:
+        if (data['high'] < data['low']).any():
+            print(f"Ошибка: high < low в данных для {ticker} ({timeframe}), исправляем")
+            data['high'] = data[['high', 'low', 'close']].max(axis=1)
+            data['low'] = data[['high', 'low', 'close']].min(axis=1)
+        # Сохранение данных в файл
+        data.to_csv(file_path, index=False)
+        print(f"Данные сохранены в {file_path}, столбцы: {list(data.columns)}")
+
     return data
 
-
 if __name__ == "__main__":
-    df = get_historical_data("SBER", "4h", 1)
+    df = get_historical_data("SBER", "weekly", 1)
     print(df.head())

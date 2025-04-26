@@ -106,7 +106,7 @@ def get_company_tickers(company_name: str, companies_df, chat_id, bot, model="lo
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": f"Найди тикер для {company_name}"}
                     ],
-                    max_tokens=100,
+                    max_tokens=20000,
                     temperature=0.1
                 )
                 raw_response = response.choices[0].message.content.strip()

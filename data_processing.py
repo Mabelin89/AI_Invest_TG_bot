@@ -8,31 +8,13 @@ from bot_config import GIGACHAT_API_KEY, VERIFY_SSL_CERTS
 from openai import OpenAI
 from moex_parser import get_historical_data
 from utils import read_csv_file, read_monthly_macro_content, read_yearly_macro_content
+from ta.trend import ADXIndicator
 
 REPORTS_DIR = "reports"
 HISTORICAL_DATA_DIR = "historical_data"
 
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
-
-def calculate_adx(high, low, close, period):
-    delta_high = high.diff()
-    delta_low = low.diff()
-    plus_dm = np.where((delta_high > delta_low) & (delta_high > 0), delta_high, 0)
-    minus_dm = np.where((delta_low > delta_high) & (delta_low > 0), delta_low, 0)
-
-    tr = pd.concat([
-        high - low,
-        abs(high - close.shift()),
-        abs(low - close.shift())
-    ], axis=1).max(axis=1)
-
-    atr = tr.rolling(window=period, min_periods=1).mean()
-    plus_di = 100 * pd.Series(plus_dm).rolling(window=period, min_periods=1).mean() / atr
-    minus_di = 100 * pd.Series(minus_dm).rolling(window=period, min_periods=1).mean() / atr
-    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-    adx = dx.rolling(window=period, min_periods=1).mean()
-    return adx
 
 def save_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
@@ -46,6 +28,26 @@ def save_historical_data(ticker, timeframe, period_years):
     print(f"Получены данные для {ticker} ({timeframe}): {len(data)} строк, столбцы: {list(data.columns)}")
     data['date'] = pd.to_datetime(data['date'])
     data.set_index('date', inplace=True)
+
+    # Проверка наличия необходимых столбцов
+    required_columns = ['open', 'high', 'low', 'close', 'volume']
+    missing_columns = [col for col in required_columns if col not in data.columns]
+    if missing_columns:
+        print(f"Ошибка: отсутствуют столбцы {missing_columns}, аппроксимация high и low")
+        for col in missing_columns:
+            if col in ['high', 'low']:
+                volatility = data['close'].pct_change().std() * np.sqrt(20) or 0.05
+                data['high'] = data['close'] * (1 + volatility)
+                data['low'] = data['close'] * (1 - volatility)
+            elif col == 'open':
+                data['open'] = data['close']
+            elif col == 'volume':
+                data['volume'] = 0
+
+    # Проверка на пропуски
+    if data[['high', 'low', 'close']].isna().any().any():
+        print("Предупреждение: найдены пропуски в high, low или close, заполняются средним")
+        data[['high', 'low', 'close']] = data[['high', 'low', 'close']].fillna(data[['high', 'low', 'close']].mean())
 
     if timeframe.lower() in ['1h', '4h', 'daily']:
         sma_periods = [10, 20, 50]
@@ -61,13 +63,6 @@ def save_historical_data(ticker, timeframe, period_years):
         adx_period = 20
         rsi_period = 21
         stoch_k, stoch_d, stoch_smooth = 21, 5, 5
-    elif timeframe.lower() in ['monthly', 'quarterly']:
-        sma_periods = [200]
-        ema_periods = [200]
-        macd_fast, macd_slow, macd_signal = 50, 200, 9
-        adx_period = 50
-        rsi_period = 50
-        stoch_k, stoch_d, stoch_smooth = 50, 10, 10
     else:
         sma_periods = [10, 20, 50]
         ema_periods = [10, 20, 50]
@@ -113,7 +108,9 @@ def save_historical_data(ticker, timeframe, period_years):
     data['VWAP'] = data['Cum_Vol_Price'] / data['Cum_Volume']
     data = data.drop(columns=['Cum_Volume', 'Cum_Vol_Price'])
 
-    data['ADX'] = calculate_adx(data['high'], data['low'], data['close'], adx_period)
+    # Расчёт ADX с использованием библиотеки ta
+    adx_indicator = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=adx_period, fillna=True)
+    data['ADX'] = adx_indicator.adx()
 
     data.reset_index(inplace=True)
 
@@ -150,7 +147,7 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
             print(f"Ошибка при скачивании {filename}: {str(e)}")
 
 def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="local"):
-    print(f"analyze_msfo_report called with ticker={ticker}, model={model}")  # Отладка
+    print(f"analyze_msfo_report called with ticker={ticker}, model={model}")
     msfo_file = os.path.join(REPORTS_DIR, f"{base_ticker}-МСФО-годовые.csv")
 
     msfo_content = None
@@ -187,7 +184,6 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
 
     bot.send_message(chat_id, "Пожалуйста подождите, работает модель.")
 
-    # Оптимизированный промпт для GigaChat (без РСБУ)
     gigachat_prompt = f"""
 Ты финансовый аналитик, анализирующий отчеты компании по стандартам МСФО и макроэкономические данные России. 
 Содержимое МСФО (данные за годы в столбцах, включая LTM): 
@@ -215,13 +211,12 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
 - Ответ не более 500 токенов.
 """
 
-    # Промпт для локальной LLM (с РСБУ)
     local_llm_prompt = f"""
 Ты финансовый аналитик, анализирующий отчеты компании по стандартам МСФО и РСБУ, а также макроэкономические данные России. 
 Содержимое МСФО (данные за годы в столбцах, включая LTM): 
 {msfo_content}
 Содержимое РСБУ (если доступно, данные за годы в столбцах): 
-{msfo_content}  # Используем МСФО вместо РСБУ, так как РСБУ исключено
+{msfo_content}
 Помесячные макроэкономические данные России (за последние {period_years} лет): 
 {monthly_macro_content}
 Годовые макроэкономические данные России (за последние {period_years} лет): 
