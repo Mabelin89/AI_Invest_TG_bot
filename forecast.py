@@ -4,7 +4,7 @@ from bot_config import GIGACHAT_API_KEY, VERIFY_SSL_CERTS
 from openai import OpenAI
 import os
 from datetime import datetime
-from data_processing import save_historical_data, download_reports, read_csv_file, read_monthly_macro_content, read_yearly_macro_content
+from data_processing import save_historical_data, download_reports, read_csv_file, read_monthly_macro_content, read_yearly_macro_content, optimize_msfo_content, optimize_monthly_macro, optimize_yearly_macro
 import re
 
 def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=False, model="local"):
@@ -44,132 +44,117 @@ def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=Fal
         print(f"Ошибка: отсутствуют столбцы {missing_columns}")
         return
 
-    # Используем все данные за год вместо 15 точек
     forecast_data = data[forecast_columns].copy()
     forecast_data['date'] = pd.to_datetime(forecast_data['date']).dt.strftime('%Y-%m-%d')
-    indicators = forecast_data.to_string(index=False)
+    indicators = forecast_data.to_csv(index=False, header=True, sep='|', lineterminator='\n')
+    indicators = re.sub(r'[ \t]+', '', indicators)
 
     download_reports(ticker, is_preferred, base_ticker)
     msfo_file = os.path.join("reports", f"{base_ticker}-МСФО-годовые.csv")
 
-    msfo_content = None
+    msfo_content = "Отсутствует"
     if os.path.exists(msfo_file):
-        msfo_df = read_csv_file(msfo_file)
-        if msfo_df is not None:
-            msfo_content = msfo_df.to_string(index=False)
+        try:
+            msfo_df = read_csv_file(msfo_file)
+            if msfo_df is not None:
+                msfo_content = optimize_msfo_content(msfo_df)
+            else:
+                print(f"Ошибка: не удалось прочитать МСФО для {base_ticker}")
+        except Exception as e:
+            print(f"Ошибка чтения МСФО для {base_ticker}: {str(e)}")
 
-    monthly_macro_df = read_monthly_macro_content()
-    yearly_macro_df = read_yearly_macro_content()
-    monthly_macro_content = None
-    yearly_macro_content = None
-    if monthly_macro_df is not None:
-        monthly_macro_df['Дата'] = pd.to_datetime(monthly_macro_df['Дата'], format='%Y-%m')
-        monthly_macro_df = monthly_macro_df[monthly_macro_df['Дата'].dt.year >= 2024]
-        monthly_macro_content = monthly_macro_df.to_string(index=False)
-    if yearly_macro_df is not None:
-        yearly_macro_df = yearly_macro_df[yearly_macro_df['Год'] >= 2024]
-        yearly_macro_content = yearly_macro_df.to_string(index=False)
+    monthly_macro_content = "Отсутствует"
+    try:
+        monthly_macro_df = read_monthly_macro_content()
+        if monthly_macro_df is not None and not monthly_macro_df.empty:
+            monthly_macro_df['Дата'] = pd.to_datetime(monthly_macro_df['Дата'], format='%Y-%m', errors='coerce')
+            monthly_macro_df = monthly_macro_df[monthly_macro_df['Дата'].dt.year >= 2024]
+            monthly_macro_content = optimize_monthly_macro(monthly_macro_df)
+        else:
+            print("Месячные макро-данные недоступны")
+    except Exception as e:
+        print(f"Ошибка обработки месячных макро-данных: {str(e)}")
+
+    yearly_macro_content = "Отсутствует"
+    try:
+        yearly_macro_df = read_yearly_macro_content()
+        if yearly_macro_df is not None and not yearly_macro_df.empty:
+            yearly_macro_df = yearly_macro_df[yearly_macro_df['Год'] >= 2024]
+            yearly_macro_content = optimize_yearly_macro(yearly_macro_df)
+        else:
+            print("Годовые макро-данные недоступны")
+    except Exception as e:
+        print(f"Ошибка обработки годовых макро-данных: {str(e)}")
 
     bot.send_message(chat_id, "Формируется краткосрочный прогноз, подождите.")
 
-    # Сжатый промпт для GigaChat с данными за год
     gigachat_prompt = f"""
 Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (weekly), МСФО и макроэкономике России.
-
-Текущая цена: {current_price}
-
-Данные (год, weekly):
+Текущая цена:{current_price}
+Данные (год, weekly, дата|close|SMA_50|MACD|ADX|RSI_21|VWAP, |, \n):
 {indicators}
-
-МСФО:
-{msfo_content if msfo_content else 'Отсутствует'}
-
-Макро (месячные, 2024-2025):
-{monthly_macro_content if monthly_macro_content else 'Отсутствует'}
-
-Макро (годовые, 2024-2025):
-{yearly_macro_content if yearly_macro_content else 'Отсутствует'}
-
+МСФО (показатели|годы, |, \n):
+{msfo_content}
+Макро (месячные, 2024-2025, дата|CPI|Rate|USD/RUB, |, \n):
+{monthly_macro_content}
+Макро (годовые, 2024-2025, год|CPI|Rate|USD/RUB, |, \n):
+{yearly_macro_content}
 Индикаторы:
-- SMA_50: простая скользящая (50)
-- MACD: (24, 52, 9)
-- ADX: сила тренда (20)
-- RSI_21: относительная сила (21)
-- VWAP: объёмно-взвешенная цена
-
+SMA_50:простая скользящая (50)
+MACD:(24,52,9)
+ADX:сила тренда (20)
+RSI_21:относительная сила (21)
+VWAP:объёмно-взвешенная цена
 Задача:
-1. Анализируй тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21), сравни close с SMA_50, VWAP.
-2. Учти МСФО (прибыль, активы, EV/EBITDA) и макроэкономику (инфляция, ставка, USD/RUB).
-3. Прогноз на 1-3 месяца: направление (рост, падение, боковик), вероятность (%), поддержка/сопротивление.
-4. Рекомендация: Активно продавать/Продавать/Держать/Покупать/Активно покупать (по всем данным и по индикаторам с обоснованием).
-
+1.Анализируй тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21), сравни close с SMA_50, VWAP.
+2.Учти МСФО (NP, Assets, EV/EBITDA) и макро (CPI, Rate, USD/RUB).
+3.Прогноз на 1-3 месяца:направление (рост,падение,боковик), вероятность (%), поддержка/сопротивление.
+4.Рекомендация:Активно продавать/Продавать/Держать/Покупать/Активно покупать (по всем данным и по индикаторам с обоснованием).
 Формат ответа:
-Текущая цена: [число]
-Прогноз: [направление] ([число])
-Поддержка: [число], Сопротивление: [число]
-Рекомендация (все данные): [действие]
-Рекомендация (индикаторы): [действие] - [обоснование]
-Комментарий: [обоснование: индикаторы, МСФО, макро]
+Текущая цена:[число]
+Прогноз:[направление] ([число])
+Поддержка:[число],Сопротивление:[число]
+Рекомендация (все данные):[действие]
+Рекомендация (индикаторы):[действие]|[обоснование]
+Комментарий:[обоснование: индикаторы, МСФО, макро]
 
 Правила:
-- Не используй Markdown (**, #, $, %, *, -), заголовки, списки или лишние пробелы/переносы.
-- Числа без единиц измерения (например, 1273.5, 60, 1150).
-- Каждая строка формата ответа начинается с указанного заголовка, без отступов.
+Без Markdown
+
 """
 
-    # Промпт для локальной LLM (без изменений)
     local_llm_prompt = f"""
-Ты финансовый аналитик, специализирующийся на краткосрочных прогнозах (1-3 месяца). Используй данные акции (тикер: {ticker}) за последние 15 недель (таймфрейм: weekly), финансовые показатели МСФО и макроэкономические данные России для прогнозирования цены акции.
-
-**Текущая цена акции:** {current_price}
-
-**Исторические данные (последние 15 точек, weekly):**
+Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (weekly), МСФО и макроэкономике России.
+Текущая цена:{current_price}
+Данные (год, weekly, дата|close|SMA_50|MACD|ADX|RSI_21|VWAP, |, \n):
 {indicators}
+МСФО (показатели|годы, |, \n):
+{msfo_content}
+Макро (месячные, 2024-2025, дата|CPI|Rate|USD/RUB, |, \n):
+{monthly_macro_content}
+Макро (годовые, 2024-2025, год|CPI|Rate|USD/RUB, |, \n):
+{yearly_macro_content}
+Индикаторы:
+SMA_50:простая скользящая (50)
+MACD:(24,52,9)
+ADX:сила тренда (20)
+RSI_21:относительная сила (21)
+VWAP:объёмно-взвешенная цена
+Задача:
+1.Анализируй тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21), сравни close с SMA_50, VWAP.
+2.Учти МСФО реквизиты компании из МСФО (NP, Assets, EV/EBITDA) и макро (CPI, Rate, USD/RUB).
+3.Прогноз на 1-3 месяца:направление (рост,падение,боковик), вероятность (%), уровни поддержки/сопротивления.
+4.Рекомендация:Активно продавать/Продавать/Держать/Покупать/Активно покупать (по всем данным и по индикаторам с обоснованием).
+Формат ответа:
+Текущая цена:[число]
+Прогноз:[направление] ([число])
+Поддержка:[число],Сопротивление:[число]
+Рекомендация (все данные):[действие]
+Рекомендация (индикаторы):[действие]|[обоснование]
+Комментарий:[обоснование: индикаторы, МСФО, макро]
 
-**Финансовые показатели МСФО:**
-{msfo_content if msfo_content else 'Отсутствует'}
+Без Markdown
 
-**Финансовые показатели РСБУ (если доступны):**
-{msfo_content if msfo_content else 'Отсутствует'}  # Используем МСФО вместо РСБУ
-
-**Месячные макроэкономические данные России (2024-2025):**
-{monthly_macro_content if monthly_macro_content else 'Отсутствует'}
-
-**Годовые макроэкономические данные России (2024-2025):**
-{yearly_macro_content if yearly_macro_content else 'Отсутствует'}
-
-**Индикаторы:**
-- SMA_50: 50-периодная простая скользящая средняя
-- MACD: индикатор (24, 52, 9)
-- ADX: индекс силы тренда (20-периодный)
-- RSI_21: индекс относительной силы (21-периодный)
-- VWAP: объёмно-взвешенная средняя цена
-
-**Задача:**
-1. Проанализируй данные:
-   - Оцени тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21).
-   - Сравни close с SMA_50 и VWAP для определения направления.
-2. Учти финансовые показатели МСФО (Чистая прибыль, Активы, EV/EBITDA).
-3. Учти макроэкономику (Инфляция, Ключевая ставка, Курс USD/RUB).
-4. Спрогнозируй движение цены на 1-3 месяца:
-   - Укажи направление (рост, падение, боковик).
-   - Дай вероятность основного сценария (%).
-   - Определи уровни поддержки и сопротивления.
-5. Дай рекомендацию по действиям с акцией (Активно продавать, Продавать, Держать, Покупать, Активно покупать) на основе всех данных.
-6. Дай рекомендацию на основе индикаторов (ADX, RSI_21, MACD) с обоснованием.
-
-**Формат ответа:**
-- Текущая цена: [значение]
-- Прогноз: [направление] (вероятность X%)
-- Поддержка: [уровень], Сопротивление: [уровень]
-- Рекомендация (все данные): [действие]
-- Рекомендация (индикаторы): [действие] — [обоснование]
-- Комментарий: [краткое обоснование с учётом индикаторов, МСФО и макроэкономики]
-
-**Правила:**
-- Опирайся только на предоставленные данные.
-- Ответ не более 500 токенов.
-- Входной промпт до 50,000 токенов.
 """
 
     system_message = gigachat_prompt if model == "gigachat" else local_llm_prompt
@@ -203,7 +188,7 @@ def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=Fal
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": f"Сделай краткосрочный прогноз для акции {ticker}."}
                 ],
-                max_tokens=50990,
+                max_tokens=500,
                 temperature=0.3
             )
             raw_response = response.choices[0].message.content.strip()

@@ -26,17 +26,19 @@ def save_historical_data(ticker, timeframe, period_years):
         return None
 
     print(f"Получены данные для {ticker} ({timeframe}): {len(data)} строк, столбцы: {list(data.columns)}")
-    data['date'] = pd.to_datetime(data['date'])
+    data['date'] = pd.to_datetime(data['date'], errors='coerce')
+    if data['date'].isna().any():
+        print(f"Ошибка: некорректные даты для {ticker}")
+        return None
     data.set_index('date', inplace=True)
 
-    # Проверка наличия необходимых столбцов
     required_columns = ['open', 'high', 'low', 'close', 'volume']
     missing_columns = [col for col in required_columns if col not in data.columns]
     if missing_columns:
         print(f"Ошибка: отсутствуют столбцы {missing_columns}, аппроксимация high и low")
         for col in missing_columns:
             if col in ['high', 'low']:
-                volatility = data['close'].pct_change().std() * np.sqrt(20) or 0.05
+                volatility = data['close'].pct_change().std() * np.sqrt(20) if not data['close'].empty else 0.05
                 data['high'] = data['close'] * (1 + volatility)
                 data['low'] = data['close'] * (1 - volatility)
             elif col == 'open':
@@ -44,10 +46,9 @@ def save_historical_data(ticker, timeframe, period_years):
             elif col == 'volume':
                 data['volume'] = 0
 
-    # Проверка на пропуски
     if data[['high', 'low', 'close']].isna().any().any():
-        print("Предупреждение: найдены пропуски в high, low или close, заполняются средним")
-        data[['high', 'low', 'close']] = data[['high', 'low', 'close']].fillna(data[['high', 'low', 'close']].mean())
+        print("Предупреждение: найдены пропуски в high, low или close, заполняются последним значением")
+        data[['high', 'low', 'close']] = data[['high', 'low', 'close']].fillna(method='ffill').fillna(method='bfill')
 
     if timeframe.lower() in ['1h', '4h', 'daily']:
         sma_periods = [10, 20, 50]
@@ -108,7 +109,6 @@ def save_historical_data(ticker, timeframe, period_years):
     data['VWAP'] = data['Cum_Vol_Price'] / data['Cum_Volume']
     data = data.drop(columns=['Cum_Volume', 'Cum_Vol_Price'])
 
-    # Расчёт ADX с использованием библиотеки ta
     adx_indicator = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=adx_period, fillna=True)
     data['ADX'] = adx_indicator.adx()
 
@@ -136,15 +136,115 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
     for url, filename in zip(report_urls, report_names):
         file_path = os.path.join(REPORTS_DIR, filename)
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
                 print(f"Отчет сохранен: {file_path}")
             else:
                 print(f"Не удалось скачать отчет {filename}: статус {response.status_code}")
-        except Exception as e:
+        except requests.RequestException as e:
             print(f"Ошибка при скачивании {filename}: {str(e)}")
+
+def optimize_msfo_content(msfo_df):
+    """
+    Оптимизирует МСФО-данные для экономии токенов и упрощения понимания LLM.
+    """
+    if msfo_df is None or msfo_df.empty:
+        return "Отсутствует"
+
+    key_indicators = {
+        'Чистая прибыль, млрд руб': 'NP',
+        'Активы, млрд руб': 'Assets',
+        'Чистые активы, млрд руб': 'Equity',
+        'P/E': 'P/E',
+        'P/B': 'P/B',
+        'EV/EBITDA': 'EV/EBITDA',
+        'Операционная прибыль, млрд руб': 'OP'
+    }
+
+    msfo_df = msfo_df[msfo_df['Unnamed: 0'].isin(key_indicators.keys())]
+    msfo_df = msfo_df.dropna(how='all', subset=msfo_df.columns[1:])
+
+    if msfo_df.empty:
+        return "Отсутствует"
+
+    msfo_df['Unnamed: 0'] = msfo_df['Unnamed: 0'].map(key_indicators)
+    years = [col for col in msfo_df.columns[1:] if col.isdigit() and int(col) >= 2008 or col == 'LTM']
+    if not years:
+        return "Отсутствует"
+    msfo_df = msfo_df[['Unnamed: 0'] + years]
+    msfo_df = msfo_df.fillna('н/д')
+
+    msfo_str = msfo_df.to_csv(index=False, header=True, sep='|', lineterminator='\n')
+    msfo_str = re.sub(r'[ \t]+', '', msfo_str)
+    msfo_str = msfo_str.replace('Unnamed:0', 'Показатель')
+    return msfo_str
+
+def optimize_monthly_macro(monthly_macro_df):
+    """
+    Оптимизирует месячные макроэкономические данные для экономии токенов.
+    """
+    if monthly_macro_df is None or monthly_macro_df.empty:
+        return "Отсутствует"
+
+    key_columns = {
+        'Дата': 'Date',
+        'Инфляция (CPI, %, год к году)': 'CPI',
+        'Ключевая ставка (%)': 'Rate',
+        'Обменный курс USD/RUB (ср. за месяц)': 'USD/RUB'
+    }
+
+    available_columns = [col for col in key_columns.keys() if col in monthly_macro_df.columns]
+    if not available_columns:
+        return "Отсутствует"
+
+    monthly_macro_df = monthly_macro_df[available_columns]
+    monthly_macro_df = monthly_macro_df.rename(columns=key_columns)
+
+    try:
+        monthly_macro_df['Date'] = pd.to_datetime(monthly_macro_df['Date'], errors='coerce').dt.strftime('%Y-%m')
+        if monthly_macro_df['Date'].isna().any():
+            print("Предупреждение: некорректные даты в месячных макро-данных")
+            return "Отсутствует"
+    except Exception as e:
+        print(f"Ошибка обработки дат в месячных макро-данных: {str(e)}")
+        return "Отсутствует"
+
+    monthly_macro_df = monthly_macro_df.dropna(how='all', subset=['CPI', 'Rate', 'USD/RUB'])
+    monthly_macro_df = monthly_macro_df.fillna('н/д')
+
+    macro_str = monthly_macro_df.to_csv(index=False, header=True, sep='|', lineterminator='\n')
+    macro_str = re.sub(r'[ \t]+', '', macro_str)
+    return macro_str
+
+def optimize_yearly_macro(yearly_macro_df):
+    """
+    Оптимизирует годовые макроэкономические данные для экономии токенов.
+    """
+    if yearly_macro_df is None or yearly_macro_df.empty:
+        return "Отсутствует"
+
+    key_columns = {
+        'Год': 'Year',
+        'Инфляция (CPI, %, дек к дек)': 'CPI',
+        'Ключевая ставка (%)': 'Rate',
+        'Обменный курс USD/RUB (ср. за год)': 'USD/RUB'
+    }
+
+    available_columns = [col for col in key_columns.keys() if col in yearly_macro_df.columns]
+    if not available_columns:
+        return "Отсутствует"
+
+    yearly_macro_df = yearly_macro_df[available_columns]
+    yearly_macro_df = yearly_macro_df.rename(columns=key_columns)
+
+    yearly_macro_df = yearly_macro_df.dropna(how='all', subset=['CPI', 'Rate', 'USD/RUB'])
+    yearly_macro_df = yearly_macro_df.fillna('н/д')
+
+    macro_str = yearly_macro_df.to_csv(index=False, header=True, sep='|', lineterminator='\n')
+    macro_str = re.sub(r'[ \t]+', '', macro_str)
+    return macro_str
 
 def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="local"):
     print(f"analyze_msfo_report called with ticker={ticker}, model={model}")
@@ -155,71 +255,87 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
     yearly_macro_content = None
 
     if os.path.exists(msfo_file):
-        msfo_df = read_csv_file(msfo_file)
-        if msfo_df is not None:
-            msfo_content = msfo_df.to_string(index=False)
-        else:
-            return f"Не удалось прочитать отчет МСФО для {base_ticker}. Проверьте файл '{msfo_file}'."
+        try:
+            msfo_df = read_csv_file(msfo_file)
+            if msfo_df is not None:
+                msfo_content = optimize_msfo_content(msfo_df)
+            else:
+                return f"Не удалось прочитать отчет МСФО для {base_ticker}. Проверьте файл '{msfo_file}'."
+        except Exception as e:
+            return f"Ошибка чтения МСФО для {base_ticker}: {str(e)}"
     else:
         return f"Отчет МСФО для {base_ticker} не найден в папке '{REPORTS_DIR}'."
 
-    monthly_macro_df = read_monthly_macro_content()
-    if monthly_macro_df is not None:
-        current_year = 2025
-        start_year = current_year - period_years
-        monthly_macro_df['Дата'] = pd.to_datetime(monthly_macro_df['Дата'], format='%Y-%m')
-        monthly_macro_df = monthly_macro_df[monthly_macro_df['Дата'].dt.year >= start_year]
-        monthly_macro_content = monthly_macro_df.to_string(index=False)
-    else:
-        print("Месячные макроэкономические данные недоступны, продолжаем без них.")
+    try:
+        monthly_macro_df = read_monthly_macro_content()
+        if monthly_macro_df is not None and not monthly_macro_df.empty:
+            current_year = 2025
+            start_year = current_year - period_years
+            monthly_macro_df['Дата'] = pd.to_datetime(monthly_macro_df['Дата'], format='%Y-%m', errors='coerce')
+            monthly_macro_df = monthly_macro_df[monthly_macro_df['Дата'].dt.year >= start_year]
+            monthly_macro_content = optimize_monthly_macro(monthly_macro_df)
+        else:
+            monthly_macro_content = "Отсутствует"
+    except Exception as e:
+        print(f"Ошибка обработки месячных макро-данных: {str(e)}")
+        monthly_macro_content = "Отсутствует"
 
-    yearly_macro_df = read_yearly_macro_content()
-    if yearly_macro_df is not None:
-        current_year = 2025
-        start_year = current_year - period_years
-        yearly_macro_df = yearly_macro_df[yearly_macro_df['Год'] >= start_year]
-        yearly_macro_content = yearly_macro_df.to_string(index=False)
-    else:
-        print("Годовые макроэкономические данные недоступны, продолжаем без них.")
+    try:
+        yearly_macro_df = read_yearly_macro_content()
+        if yearly_macro_df is not None and not yearly_macro_df.empty:
+            current_year = 2025
+            start_year = current_year - period_years
+            yearly_macro_df = yearly_macro_df[yearly_macro_df['Год'] >= start_year]
+            yearly_macro_content = optimize_yearly_macro(yearly_macro_df)
+        else:
+            yearly_macro_content = "Отсутствует"
+    except Exception as e:
+        print(f"Ошибка обработки годовых макро-данных: {str(e)}")
+        yearly_macro_content = "Отсутствует"
 
-    bot.send_message(chat_id, "Пожалуйста подождите, работает модель.")
+    bot.send_message(chat_id, "Анализируется отчет МСФО, подождите.")
 
     gigachat_prompt = f"""
-Ты финансовый аналитик, анализирующий отчеты компании по стандартам МСФО и макроэкономические данные России. 
-Содержимое МСФО (данные за годы в столбцах, включая LTM): 
+Ты финансовый аналитик, анализирующий МСФО и макроэкономику России.
+МСФО (показатели|годы, разделитель |, строки \n):
 {msfo_content}
-Помесячные макроэкономические данные России (за последние {period_years} лет): 
+Макро месячные ({period_years} лет, дата|показатели, |, \n):
 {monthly_macro_content}
-Годовые макроэкономические данные России (за последние {period_years} лет): 
+Макро годовые ({period_years} лет, год|показатели, |, \n):
 {yearly_macro_content}
 
 Задача:
-1. Извлеки список всех годов из заголовков столбцов МСФО (начиная с 2008 по LTM).
-2. Определи ключевые финансовые показатели из МСФО: Чистый операционный доход, Чистая прибыль, Активы, Капитал, Кредитный портфель, Депозиты, P/E, P/B, EV/EBITDA.
-3. Для EV/EBITDA: если есть, используй напрямую; если нет, рассчитай как EV / EBITDA (используй "Операционная прибыль" с пометкой "(приблизительно)" при отсутствии EBITDA).
-4. Сравни динамику Чистой прибыли и Активов с Инфляцией (CPI), Ключевой ставкой и Обменным курсом USD/RUB за те же годы.
-5. Укажи влияние макроэкономики (инфляция, ставка, курс USD/RUB) на показатели компании.
-6. Верни результат в формате:
-   - Данные за годы: 2008 | 2009 | ... | LTM
-   - Показатель: Значение 2008 | Значение 2009 | ... | Значение LTM (единица измерения, если есть)
-   - Комментарий: [влияние макроэкономики на показатели]
-   Раздели строки переносом.
-7. Если данных за год нет, укажи "н/д".
+1. Извлеки годы из МСФО (2008-LTM).
+2. Используй показатели: NP (Чистая прибыль), Assets (Активы), Equity (Капитал), P/E, P/B, EV/EBITDA.
+3. Для EV/EBITDA: используй напрямую или рассчитай как EV/OP (приблизительно) если нет.
+4. Сравни NP и Assets с CPI, Rate, USD/RUB за те же годы.
+5. Оцени влияние макро (CPI, Rate, USD/RUB) на показатели.
+6. Формат ответа:
+Годы:2008|2009|...|LTM
+NP:[значение]|...|[значение]
+Assets:[значение]|...|[значение]
+Equity:[значение]|...|[значение]
+P/E:[значение]|...|[значение]
+P/B:[значение]|...|[значение]
+EV/EBITDA:[значение]|...|[значение]
+Комментарий:[влияние макро на показатели]
+7. Если данных нет, укажи н/д.
 
 Правила:
-- Используй только предоставленные данные.
-- Ответ не более 500 токенов.
+- Только предоставленные данные.
+- Ответ ≤ 500 токенов.
+- Без Markdown, лишних пробелов, переносов.
 """
 
     local_llm_prompt = f"""
 Ты финансовый аналитик, анализирующий отчеты компании по стандартам МСФО и РСБУ, а также макроэкономические данные России. 
-Содержимое МСФО (данные за годы в столбцах, включая LTM): 
+Содержимое МСФО (данные за годы в столбцах, включая LTM, |, \n): 
 {msfo_content}
-Содержимое РСБУ (если доступно, данные за годы в столбцах): 
+Содержимое РСБУ (если доступно, данные за годы в столбцах, |, \n): 
 {msfo_content}
-Помесячные макроэкономические данные России (за последние {period_years} лет): 
+Помесячные макроэкономические данные России (за последние {period_years} лет, |, \n): 
 {monthly_macro_content}
-Годовые макроэкономические данные России (за последние {period_years} лет): 
+Годовые макроэкономические данные России (за последние {period_years} лет, |, \n): 
 {yearly_macro_content}
 
 Задача:
@@ -258,6 +374,7 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
                 response = gigachat_client.chat(system_message)
                 raw_response = response.choices[0].message.content.strip()
                 result = re.sub(r'<think>.*?</think>\s*|<think>.*$|</think>\s*', '', raw_response, flags=re.DOTALL).strip()
+                bot.send_message(chat_id, result)
                 return result
         else:
             print("Using local LLM for MSFO analysis")
@@ -272,7 +389,10 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
                 temperature=0.1
             )
             raw_response = response.choices[0].message.content.strip()
-            result = re.sub(r'<think>.*?</think>\s*|<think>.*$|</think>\s*', '', raw_response, flags=re.DOTALL).strip()
+            result = re.sub(r'<think>.*?</think>\s*|<think>.*$?></think>\s*', '', raw_response, flags=re.DOTALL).strip()
+            bot.send_message(chat_id, result)
             return result
     except Exception as e:
-        return f"Ошибка при анализе отчетов для {base_ticker}: {str(e)}\nТип ошибки: {type(e).__name__}"
+        error_msg = f"Ошибка при анализе отчетов для {base_ticker}: {str(e)}\nТип ошибки: {type(e).__name__}"
+        bot.send_message(chat_id, error_msg)
+        return error_msg
