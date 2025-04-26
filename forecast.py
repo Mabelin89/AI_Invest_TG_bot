@@ -9,13 +9,13 @@ import re
 
 def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=False, model="local"):
     """
-    Генерирует краткосрочный прогноз (1-3 месяца) для акции с таймфреймом 'weekly' за 1 год.
-    Использует столбцы: date, close, SMA_50, MACD, ADX, RSI_21, VWAP.
+    Генерирует краткосрочный прогноз (1-3 месяца) для акции с таймфреймом 'daily' за 1 год.
+    Использует столбцы: date, close, SMA_20, SMA_50, MACD, ADX_14, RSI_14, VWAP.
     Включает текущую цену в ответ бота.
     Сохраняет промпт в папку 'prompts'.
     """
     print(f"short_term_forecast called with ticker={ticker}, model={model}")
-    timeframe = "weekly"
+    timeframe = "daily"
     period_years = 1
 
     if base_ticker is None:
@@ -37,7 +37,7 @@ def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=Fal
         print(f"Ошибка: столбец close отсутствует в данных для {ticker}")
         return
 
-    forecast_columns = ['date', 'close', 'SMA_50', 'MACD', 'ADX', 'RSI_21', 'VWAP']
+    forecast_columns = ['date', 'close', 'SMA_20', 'SMA_50', 'MACD', 'ADX_14', 'RSI_14', 'VWAP']
     missing_columns = [col for col in forecast_columns if col not in data.columns]
     if missing_columns:
         bot.send_message(chat_id, f"Ошибка: отсутствуют столбцы {missing_columns} в данных для {ticker}.")
@@ -89,25 +89,26 @@ def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=Fal
     bot.send_message(chat_id, "Формируется краткосрочный прогноз, подождите.")
 
     gigachat_prompt = f"""
-Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (weekly), МСФО и макроэкономике России.
+Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (daily), МСФО и макроэкономике России.
 Текущая цена:{current_price}
-Данные (год, weekly, дата|close|SMA_50|MACD|ADX|RSI_21|VWAP, |, \n):
+Данные (год, daily, дата|close|SMA_20|SMA_50|MACD|ADX_14|RSI_14|VWAP, |, \n):
 {indicators}
 МСФО (показатели|годы, |, \n):
 {msfo_content}
 Макро (месячные, 2024-2025, дата|CPI|Rate|USD/RUB, |, \n):
 {monthly_macro_content}
-Макро (годовые, 2024-2025, год|CPI|Rate|USD/RUB, |, \n):
+Макро (годовые, 2024-2025, год|GDP|CPI|Unemployment|Rate|TradeBalance|BudgetDeficit|MOEX|USD/RUB|CCI, |, \n):
 {yearly_macro_content}
 Индикаторы:
-SMA_50:простая скользящая (50)
-MACD:(24,52,9)
-ADX:сила тренда (20)
-RSI_21:относительная сила (21)
-VWAP:объёмно-взвешенная цена
+SMA_20:простая скользящая (20 дней)
+SMA_50:простая скользящая (50 дней)
+MACD:(12,26,9)
+ADX_14:сила тренда (14 дней)
+RSI_14:относительная сила (14 дней)
+VWAP:объёмно-взвешенная цена (дневная)
 Задача:
-1.Анализируй тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21), сравни close с SMA_50, VWAP.
-2.Учти МСФО (NP, Assets, EV/EBITDA) и макро (CPI, Rate, USD/RUB).
+1.Анализируй краткосрочный тренд (SMA_20), среднесрочный тренд (SMA_50), импульс (MACD), силу тренда (ADX_14), перекупленность/перепроданность (RSI_14), сравни close с VWAP.
+2.Учти МСФО (NP, Assets, EV/EBITDA) и макро (GDP, CPI, Unemployment, Rate, TradeBalance, BudgetDeficit, MOEX, USD/RUB, CCI).
 3.Прогноз на 1-3 месяца:направление (рост,падение,боковик), вероятность (%), поддержка/сопротивление.
 4.Рекомендация:Активно продавать/Продавать/Держать/Покупать/Активно покупать (по всем данным и по индикаторам с обоснованием).
 Формат ответа:
@@ -117,33 +118,33 @@ VWAP:объёмно-взвешенная цена
 Рекомендация (все данные):[действие]
 Рекомендация (индикаторы):[действие]|[обоснование]
 Комментарий:[обоснование: индикаторы, МСФО, макро]
-
 Правила:
-Без Markdown
-
+Без Markdown, 
+Ответ должен быть разделен на абзацы
 """
 
     local_llm_prompt = f"""
-Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (weekly), МСФО и макроэкономике России.
+Ты финансовый аналитик, прогнозирующий цену акции (тикер: {ticker}) на 1-3 месяца по данным за год (daily), МСФО и макроэкономике России.
 Текущая цена:{current_price}
-Данные (год, weekly, дата|close|SMA_50|MACD|ADX|RSI_21|VWAP, |, \n):
+Данные (год, daily, дата|close|SMA_20|SMA_50|MACD|ADX_14|RSI_14|VWAP, |, \n):
 {indicators}
 МСФО (показатели|годы, |, \n):
 {msfo_content}
 Макро (месячные, 2024-2025, дата|CPI|Rate|USD/RUB, |, \n):
 {monthly_macro_content}
-Макро (годовые, 2024-2025, год|CPI|Rate|USD/RUB, |, \n):
+Макро (годовые, 2024-2025, год|GDP|CPI|Unemployment|Rate|TradeBalance|BudgetDeficit|MOEX|USD/RUB|CCI, |, \n):
 {yearly_macro_content}
 Индикаторы:
-SMA_50:простая скользящая (50)
-MACD:(24,52,9)
-ADX:сила тренда (20)
-RSI_21:относительная сила (21)
-VWAP:объёмно-взвешенная цена
+SMA_20:простая скользящая (20 дней)
+SMA_50:простая скользящая (50 дней)
+MACD:(12,26,9)
+ADX_14:сила тренда (14 дней)
+RSI_14:относительная сила (14 дней)
+VWAP:объёмно-взвешенная цена (дневная)
 Задача:
-1.Анализируй тренд (ADX), импульс (MACD), перекупленность/перепроданность (RSI_21), сравни close с SMA_50, VWAP.
-2.Учти МСФО реквизиты компании из МСФО (NP, Assets, EV/EBITDA) и макро (CPI, Rate, USD/RUB).
-3.Прогноз на 1-3 месяца:направление (рост,падение,боковик), вероятность (%), уровни поддержки/сопротивления.
+1.Анализируй краткосрочный тренд (SMA_20), среднесрочный тренд (SMA_50), импульс (MACD), силу тренда (ADX_14), перекупленность/перепроданность (RSI_14), сравни close с VWAP.
+2.Учти МСФО (NP, Assets, EV/EBITDA) и макро (GDP, CPI, Unemployment, Rate, TradeBalance, BudgetDeficit, MOEX, USD/RUB, CCI).
+3.Прогноз на 1-3 месяца:направление (рост,падение,боковик), вероятность (%), поддержка/сопротивление.
 4.Рекомендация:Активно продавать/Продавать/Держать/Покупать/Активно покупать (по всем данным и по индикаторам с обоснованием).
 Формат ответа:
 Текущая цена:[число]
@@ -152,9 +153,11 @@ VWAP:объёмно-взвешенная цена
 Рекомендация (все данные):[действие]
 Рекомендация (индикаторы):[действие]|[обоснование]
 Комментарий:[обоснование: индикаторы, МСФО, макро]
-
-Без Markdown
-
+Правила:
+Без Markdown, заголовков, списков, лишних пробелов/переносов.
+Числа без единиц (1273.5,60,1150).
+Каждая строка начинается с заголовка ответа.
+Ответ ≤ 500 токенов.
 """
 
     system_message = gigachat_prompt if model == "gigachat" else local_llm_prompt
