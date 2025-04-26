@@ -7,7 +7,7 @@ import re
 
 def get_company_tickers(company_name: str, companies_df, chat_id, bot, model="local"):
     """
-    Находит тикеры компании по её названию, используя GigaChat 2 Pro или локальную LLM.
+    Находит тикеры компании по её названию, используя GigaChat Max-2 или локальную LLM.
     Возвращает список кортежей [(тикеры, название_компании), ...].
     """
     print(f"get_company_tickers called with company_name={company_name}, model={model}")
@@ -33,7 +33,7 @@ def get_company_tickers(company_name: str, companies_df, chat_id, bot, model="lo
             with GigaChat(
                 credentials=GIGACHAT_API_KEY,
                 verify_ssl_certs=VERIFY_SSL_CERTS,
-                model="GigaChat-Pro"
+                model="GigaChat-2-Max"
             ) as gigachat_client:
                 try:
                     response = gigachat_client.chat(prompt)
@@ -106,7 +106,7 @@ def get_company_tickers(company_name: str, companies_df, chat_id, bot, model="lo
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": f"Найди тикер для {company_name}"}
                     ],
-                    max_tokens=10000,
+                    max_tokens=100,
                     temperature=0.1
                 )
                 raw_response = response.choices[0].message.content.strip()

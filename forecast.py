@@ -179,7 +179,7 @@ def short_term_forecast(ticker, chat_id, bot, base_ticker=None, is_preferred=Fal
             with GigaChat(
                 credentials=GIGACHAT_API_KEY,
                 verify_ssl_certs=VERIFY_SSL_CERTS,
-                model="GigaChat-Max"
+                model="GigaChat-2-Max"
             ) as gigachat_client:
                 response = gigachat_client.chat(system_message)
                 raw_response = response.choices[0].message.content.strip()
