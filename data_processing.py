@@ -13,8 +13,98 @@ from ta.trend import ADXIndicator
 REPORTS_DIR = "reports"
 HISTORICAL_DATA_DIR = "historical_data"
 
+
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
+
+
+def calculate_indicators(data, sma_periods=[20, 50], macd_params=(12, 26, 9), adx_period=14, rsi_period=14):
+    """
+    Рассчитывает технические индикаторы для прогноза.
+
+    Args:
+        data (pd.DataFrame): Данные с колонками ['date', 'open', 'high', 'low', 'close', 'volume'].
+        sma_periods (list): Периоды для SMA (например, [20, 50]).
+        macd_params (tuple): Параметры MACD (fast, slow, signal), например, (12, 26, 9).
+        adx_period (int): Период для ADX (например, 14).
+        rsi_period (int): Период для RSI (например, 14).
+
+    Returns:
+        pd.DataFrame: Данные с добавленными индикаторами.
+    """
+    print(f"calculate_indicators: Входные данные, столбцы: {list(data.columns)}, строк: {len(data)}")
+    if data is None or data.empty:
+        print("Ошибка: входные данные пусты или отсутствуют")
+        return None
+
+    # Создаём копию данных
+    data = data.copy()
+
+    # Проверка необходимых столбцов
+    required_columns = ['open', 'high', 'low', 'close', 'volume']
+    missing_columns = [col for col in required_columns if col not in data.columns]
+    if missing_columns:
+        print(f"Предупреждение: отсутствуют столбцы {missing_columns}, аппроксимация")
+        for col in missing_columns:
+            if col in ['high', 'low']:
+                volatility = data['close'].pct_change().std() * np.sqrt(20) if not data['close'].empty else 0.05
+                data['high'] = data['close'] * (1 + volatility)
+                data['low'] = data['close'] * (1 - volatility)
+            elif col == 'open':
+                data['open'] = data['close']
+            elif col == 'volume':
+                data['volume'] = 0
+
+    # Заполнение пропусков
+    if data[['high', 'low', 'close']].isna().any().any():
+        print("Предупреждение: найдены пропуски в high, low или close, заполняются последним значением")
+        data[['high', 'low', 'close']] = data[['high', 'low', 'close']].fillna(method='ffill').fillna(method='bfill')
+    if data['volume'].isna().any():
+        print("Предупреждение: найдены пропуски в volume, заполняются нулями")
+        data['volume'] = data['volume'].fillna(0)
+
+    # SMA
+    for period in sma_periods:
+        data[f'SMA_{period}'] = data['close'].rolling(window=period, min_periods=1).mean()
+
+    # RSI
+    delta = data['close'].diff()
+    gain = delta.where(delta > 0, 0).rolling(window=rsi_period, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period, min_periods=1).mean()
+    rs = gain / loss
+    rs = rs.replace([np.inf, -np.inf], np.nan).fillna(0)
+    data[f'RSI_{rsi_period}'] = 100 - (100 / (1 + rs))
+
+    # MACD
+    macd_fast, macd_slow, macd_signal = macd_params
+    ema_fast = calculate_ema(data['close'], macd_fast)
+    ema_slow = calculate_ema(data['close'], macd_slow)
+    data['MACD'] = ema_fast - ema_slow
+    data['MACD_signal'] = calculate_ema(data['MACD'], macd_signal)
+    data['MACD_histogram'] = data['MACD'] - data['MACD_signal']
+
+    # VWAP
+    data['Cum_Volume'] = data['volume'].cumsum()
+    data['Cum_Vol_Price'] = (data['close'] * data['volume']).cumsum()
+    data['VWAP'] = data['Cum_Vol_Price'] / data['Cum_Volume'].replace(0, np.nan)
+    data['VWAP'] = data['VWAP'].fillna(method='ffill').fillna(0)
+    data = data.drop(columns=['Cum_Volume', 'Cum_Vol_Price'])
+
+    # ADX
+    adx_indicator = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=adx_period,
+                                 fillna=True)
+    data[f'ADX_{adx_period}'] = adx_indicator.adx()
+
+    # Проверка добавленных столбцов
+    expected_columns = [f'SMA_{p}' for p in sma_periods] + ['MACD', f'ADX_{adx_period}', f'RSI_{rsi_period}', 'VWAP']
+    added_columns = [col for col in expected_columns if col in data.columns]
+    missing = [col for col in expected_columns if col not in data.columns]
+    print(f"calculate_indicators: Добавлены столбцы: {added_columns}")
+    if missing:
+        print(f"calculate_indicators: Отсутствуют столбцы: {missing}")
+
+    return data
+
 
 def save_historical_data(ticker, timeframe, period_years):
     if not os.path.exists(HISTORICAL_DATA_DIR):
@@ -109,7 +199,8 @@ def save_historical_data(ticker, timeframe, period_years):
     data['VWAP'] = data['Cum_Vol_Price'] / data['Cum_Volume']
     data = data.drop(columns=['Cum_Volume', 'Cum_Vol_Price'])
 
-    adx_indicator = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=adx_period, fillna=True)
+    adx_indicator = ADXIndicator(high=data['high'], low=data['low'], close=data['close'], window=adx_period,
+                                 fillna=True)
     data['ADX'] = adx_indicator.adx()
     data[f'ADX_{adx_period}'] = data['ADX']
 
@@ -120,6 +211,7 @@ def save_historical_data(ticker, timeframe, period_years):
     data.to_csv(file_path, index=False)
     print(f"Исторические данные с индикаторами сохранены: {file_path}, столбцы: {list(data.columns)}")
     return data
+
 
 def download_reports(ticker, is_preferred=False, base_ticker=None):
     if not os.path.exists(REPORTS_DIR):
@@ -146,6 +238,7 @@ def download_reports(ticker, is_preferred=False, base_ticker=None):
                 print(f"Не удалось скачать отчет {filename}: статус {response.status_code}")
         except requests.RequestException as e:
             print(f"Ошибка при скачивании {filename}: {str(e)}")
+
 
 def optimize_msfo_content(msfo_df):
     """
@@ -181,6 +274,7 @@ def optimize_msfo_content(msfo_df):
     msfo_str = re.sub(r'[ \t]+', '', msfo_str)
     msfo_str = msfo_str.replace('Unnamed:0', 'Показатель')
     return msfo_str
+
 
 def optimize_monthly_macro(monthly_macro_df):
     """
@@ -219,6 +313,7 @@ def optimize_monthly_macro(monthly_macro_df):
     macro_str = re.sub(r'[ \t]+', '', macro_str)
     return macro_str
 
+
 def optimize_yearly_macro(yearly_macro_df):
     """
     Оптимизирует годовые макроэкономические данные для экономии токенов.
@@ -246,12 +341,14 @@ def optimize_yearly_macro(yearly_macro_df):
     yearly_macro_df = yearly_macro_df[available_columns]
     yearly_macro_df = yearly_macro_df.rename(columns=key_columns)
 
-    yearly_macro_df = yearly_macro_df.dropna(how='all', subset=[col for col in yearly_macro_df.columns if col != 'Year'])
+    yearly_macro_df = yearly_macro_df.dropna(how='all',
+                                             subset=[col for col in yearly_macro_df.columns if col != 'Year'])
     yearly_macro_df = yearly_macro_df.fillna('н/д')
 
     macro_str = yearly_macro_df.to_csv(index=False, header=True, sep='|', lineterminator='\n')
     macro_str = re.sub(r'[ \t]+', '', macro_str)
     return macro_str
+
 
 def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="local"):
     print(f"analyze_msfo_report called with ticker={ticker}, model={model}")
@@ -271,7 +368,7 @@ def analyze_msfo_report(ticker, base_ticker, chat_id, bot, period_years, model="
         except Exception as e:
             return f"Ошибка чтения МСФО для {base_ticker}: {str(e)}"
     else:
-        return f"Отчет МСФО для {base_ticker} не найден в папке '{REPORTS_DIR}'."
+        return f"Отчет МСФО для {base_ticker} не найдена в папке '{REPORTS_DIR}'."
 
     try:
         monthly_macro_df = read_monthly_macro_content()
@@ -374,13 +471,14 @@ EV/EBITDA:[значение]|...|[значение]
         if model == "gigachat":
             print("Using GigaChat for MSFO analysis")
             with GigaChat(
-                credentials=GIGACHAT_API_KEY,
-                verify_ssl_certs=VERIFY_SSL_CERTS,
-                model="GigaChat-2-Max"
+                    credentials=GIGACHAT_API_KEY,
+                    verify_ssl_certs=VERIFY_SSL_CERTS,
+                    model="GigaChat-2-Max"
             ) as gigachat_client:
                 response = gigachat_client.chat(system_message)
                 raw_response = response.choices[0].message.content.strip()
-                result = re.sub(r'<think>.*?</think>\s*|<think>.*$|</think>\s*', '', raw_response, flags=re.DOTALL).strip()
+                result = re.sub(r'<think>.*?</think>\s*|<think>.*$?</think>\s*', '', raw_response,
+                                flags=re.DOTALL).strip()
                 bot.send_message(chat_id, result)
                 return result
         else:
@@ -390,13 +488,14 @@ EV/EBITDA:[значение]|...|[значение]
                 model="deepseek-r1-distill-qwen-14b",
                 messages=[
                     {"role": "system", "content": system_message},
-                    {"role": "user", "content": f"Анализируй отчеты для тикера {base_ticker} с учетом макроэкономических данных."}
+                    {"role": "user",
+                     "content": f"Анализируй отчеты для тикера {base_ticker} с учетом макроэкономических данных."}
                 ],
                 max_tokens=10000,
                 temperature=0.1
             )
             raw_response = response.choices[0].message.content.strip()
-            result = re.sub(r'<think>.*?</think>\s*|<think>.*$?></think>\s*', '', raw_response, flags=re.DOTALL).strip()
+            result = re.sub(r'<think>.*?</think>\s*|<think>.*$?</think>\s*', '', raw_response, flags=re.DOTALL).strip()
             bot.send_message(chat_id, result)
             return result
     except Exception as e:

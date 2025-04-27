@@ -6,7 +6,7 @@ from company_search import get_company_tickers
 from keyboards import get_timeframe_keyboard, get_plot_keyboard, get_forecast_menu_keyboard
 from data_processing import save_historical_data, download_reports, analyze_msfo_report
 from plotting import plot_and_send_chart
-from forecast import short_term_forecast
+from forecast import short_term_forecast, medium_term_forecast, long_term_forecast
 import re
 import time
 
@@ -60,7 +60,7 @@ def handle_message(message):
 
         state = user_states[chat_id]["step"]
         model = user_states[chat_id].get("model", "local")
-        print(f"Handling message with state={state}, model={model}")  # Отладка
+        print(f"Handling message with state={state}, model={model}")
 
         if state == "ask_company":
             company_name = user_message
@@ -190,7 +190,7 @@ def handle_callback(call):
 
     state = user_states[chat_id]["step"]
     model = user_states[chat_id].get("model", "local")
-    print(f"Handling callback with state={state}, model={model}")  # Отладка
+    print(f"Handling callback with state={state}, model={model}")
 
     if state == "choose_model":
         if call.data == "model_gigachat":
@@ -223,6 +223,14 @@ def handle_callback(call):
         if call.data == "short_term_forecast":
             print(f"Calling short_term_forecast with model={model}")
             short_term_forecast(ticker, chat_id, bot, base_ticker, is_preferred, model)
+            ask_next_company(chat_id)
+        elif call.data == "medium_term_forecast":
+            print(f"Calling medium_term_forecast with model={model}")
+            medium_term_forecast(ticker, chat_id, bot, base_ticker, is_preferred, model)
+            ask_next_company(chat_id)
+        elif call.data == "long_term_forecast":
+            print(f"Calling long_term_forecast with model={model}")
+            long_term_forecast(ticker, chat_id, bot, base_ticker, is_preferred, model)
             ask_next_company(chat_id)
         elif call.data == "plot":
             bot.edit_message_text(

@@ -7,52 +7,57 @@ import os
 # Константа для директории
 HISTORICAL_DATA_DIR = "historical_data"
 
-def fetch_moex_candles(ticker, start_date, end_date, timeframe):
+def fetch_moex_candles_all(ticker, start_date, end_date, timeframe):
     timeframe_map = {
-        '1m': 1,      # 1 минута
-        '10m': 10,    # 10 минут
-        '1h': 60,     # 1 час
-        'daily': 24,  # 1 день
-        'weekly': 7,  # 1 неделя
-        'monthly': 31,# 1 месяц
-        'quarterly': 4  # 1 квартал
+        '1m': 1, '10m': 10, '1h': 60, 'daily': 24, 'weekly': 7, 'monthly': 31, 'quarterly': 4
     }
     interval = timeframe_map.get(timeframe.lower(), 24)
     url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}/candles.csv"
-    params = {
-        "interval": interval,
-        "from": start_date,
-        "till": end_date,
-        "iss.reverse": "false"
-    }
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0"
     }
-    try:
-        response = requests.get(url, params=params, headers=headers)
-        if response.status_code == 200:
+    all_data = []
+    current_start = start_date
+
+    while True:
+        params = {
+            "interval": interval,
+            "from": current_start,
+            "till": end_date,
+            "iss.reverse": "false"
+        }
+        try:
+            response = requests.get(url, params=params, headers=headers)
+            if response.status_code != 200:
+                print(f"Ошибка запроса: {response.status_code}")
+                break
             csv_text = response.content.decode('utf-8')
             df = pd.read_csv(StringIO(csv_text), sep=';', skiprows=2)
             if df.empty:
-                print(f"Данные для {ticker} ({timeframe}) пусты")
-                return None
-            # Проверка наличия необходимых столбцов
-            required_columns = ['begin', 'high', 'low', 'open', 'close', 'volume']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                print(f"Ошибка: в данных для {ticker} ({timeframe}) отсутствуют столбцы: {missing_columns}")
-                return None
-            # Проверка на NaN в high и low
-            if df[['high', 'low']].isna().any().any():
-                print(f"Предупреждение: найдены NaN в high или low для {ticker} ({timeframe}), заполняются close")
-                df[['high', 'low']] = df[['high', 'low']].fillna(df['close'])
-            print(f"Успешно получены данные для {ticker} ({timeframe}): {len(df)} строк, столбцы: {list(df.columns)}")
-            return df
-        else:
-            print(f"Ошибка запроса для {ticker} ({timeframe}) за {start_date} - {end_date}: статус {response.status_code}, текст: {response.text[:100]}")
-            return None
-    except Exception as e:
-        print(f"Ошибка при запросе данных MOEX для {ticker} ({timeframe}): {str(e)}")
+                print(f"Получены все данные для {ticker} ({timeframe})")
+                break
+
+            if 'begin' not in df.columns:
+                print(f"Нет столбца 'begin' в данных")
+                break
+
+            all_data.append(df)
+            last_date = df['begin'].iloc[-1]
+            last_date_dt = pd.to_datetime(last_date) + timedelta(seconds=1)
+            current_start = last_date_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            if len(df) < 499:
+                break
+
+        except Exception as e:
+            print(f"Ошибка при запросе: {e}")
+            break
+
+    if all_data:
+        full_df = pd.concat(all_data, ignore_index=True)
+        print(f"Объединено {len(full_df)} строк данных")
+        return full_df
+    else:
         return None
 
 def aggregate_to_4h(data):
@@ -109,13 +114,12 @@ def get_historical_data(ticker, timeframe, period_years):
     if os.path.exists(file_path) and not is_data_outdated(file_path, timeframe, period_years):
         print(f"Данные в '{file_path}' актуальны, загрузка из файла")
         df = pd.read_csv(file_path)
-        # Проверка столбцов в загруженном файле
         required_columns = ['date', 'high', 'low', 'open', 'close', 'volume']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             print(f"Ошибка: в файле {file_path} отсутствуют столбцы: {missing_columns}")
-            os.remove(file_path)  # Удаляем некорректный файл
-            return get_historical_data(ticker, timeframe, period_years)  # Повторный запрос
+            os.remove(file_path)
+            return get_historical_data(ticker, timeframe, period_years)
         return df
 
     end_date = now
@@ -124,7 +128,7 @@ def get_historical_data(ticker, timeframe, period_years):
     end_date_str = end_date.strftime('%Y-%m-%d')
 
     if timeframe.lower() == '4h':
-        data = fetch_moex_candles(ticker, start_date_str, end_date_str, '1h')
+        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, '1h')
         if data is None or data.empty:
             print(f"Не удалось получить 1-часовые данные для {ticker} для агрегации в 4h")
             return pd.DataFrame()
@@ -132,25 +136,24 @@ def get_historical_data(ticker, timeframe, period_years):
         data.rename(columns={'begin': 'date'}, inplace=True)
         data = aggregate_to_4h(data)
     else:
-        data = fetch_moex_candles(ticker, start_date_str, end_date_str, timeframe)
+        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, timeframe)
         if data is None or data.empty:
             print(f"Не удалось получить данные для {ticker} ({timeframe}, {period_years} лет)")
             return pd.DataFrame()
         data = data[['begin', 'high', 'low', 'open', 'close', 'volume']]
         data.rename(columns={'begin': 'date'}, inplace=True)
 
-    # Проверка валидности high и low
     if not data.empty:
         if (data['high'] < data['low']).any():
             print(f"Ошибка: high < low в данных для {ticker} ({timeframe}), исправляем")
             data['high'] = data[['high', 'low', 'close']].max(axis=1)
             data['low'] = data[['high', 'low', 'close']].min(axis=1)
-        # Сохранение данных в файл
+
         data.to_csv(file_path, index=False)
         print(f"Данные сохранены в {file_path}, столбцы: {list(data.columns)}")
 
     return data
 
 if __name__ == "__main__":
-    df = get_historical_data("SBER", "weekly", 1)
-    print(df.head())
+    df = get_historical_data("AFLT", "weekly", 10)
+    print(df.tail())
