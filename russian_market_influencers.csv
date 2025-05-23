@@ -1,0 +1,20 @@
+Категория,Название,Тикер,Источник
+Фондовый индекс,MOEX Russia Index,IMOEX,Moscow Exchange
+Фондовый индекс,RTS Index,RTSI,Moscow Exchange
+Отраслевой индекс,Нефть и газ,MOEXOG,Moscow Exchange
+Отраслевой индекс,Финансы,MOEXFN,Moscow Exchange
+Отраслевой индекс,Металлы и добыча,MOEXMM,Moscow Exchange
+Отраслевой индекс,Потребительский сектор,MOEXCN,Moscow Exchange
+Отраслевой индекс,ИТ,MOEXIT,Moscow Exchange
+Сырьевой актив,Нефть Brent,BRN,Investing.com
+Сырьевой актив,Нефть WTI,CL,Investing.com
+Сырьевой актив,Природный газ,NG,TradingView
+Сырьевой актив,Золото,XAU/USD,Investing.com
+Сырьевой актив,Палладий,XPD/USD,Investing.com
+Сырьевой актив,Никель,NI,Investing.com
+Валютная пара,Доллар/Рубль,USD/RUB,РБК Инвестиции
+Валютная пара,Евро/Рубль,EUR/RUB,РБК Инвестиции
+Валютная пара,Юань/Рубль,CNY/RUB,РБК Инвестиции
+Глобальный индекс,S&P 500,SPX,Investing.com
+Глобальный индекс,FTSE 100,UKX,TradingView
+Глобальный индекс,Shanghai Composite,SSEC,Investing.com

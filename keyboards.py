@@ -18,8 +18,8 @@ def get_plot_keyboard():
 
 def get_forecast_menu_keyboard():
     keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("Краткосрочный прогноз", callback_data="short_term_forecast"))
-    keyboard.add(types.InlineKeyboardButton("Среднесрочный прогноз", callback_data="medium_term_forecast"))
-    keyboard.add(types.InlineKeyboardButton("Долгосрочный прогноз", callback_data="long_term_forecast"))
-    keyboard.add(types.InlineKeyboardButton("Диагностика", callback_data="diagnostics"))
+    keyboard.add(types.InlineKeyboardButton("Краткосрочный прогноз (1-3 месяца)", callback_data="short_term_forecast"))
+    keyboard.add(types.InlineKeyboardButton("Среднесрочный прогноз (3-9 месяцев) ", callback_data="medium_term_forecast"))
+    keyboard.add(types.InlineKeyboardButton("Долгосрочный прогноз (1 год и более)", callback_data="long_term_forecast"))
+#    keyboard.add(types.InlineKeyboardButton("Диагностика", callback_data="diagnostics"))
     return keyboard

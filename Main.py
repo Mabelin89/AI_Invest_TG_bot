@@ -28,7 +28,7 @@ def get_model_keyboard():
 
 # Функция для повторного вопроса о компании
 def ask_next_company(chat_id):
-    bot.send_message(chat_id, "Тикер какой компании Вас интересует?")
+    bot.send_message(chat_id, "Акции какой компании Вас интересует?")
     user_states[chat_id]["step"] = "ask_company"
 
 # Обработчик команды /start

@@ -7,12 +7,34 @@ import os
 # Константа для директории
 HISTORICAL_DATA_DIR = "historical_data"
 
-def fetch_moex_candles_all(ticker, start_date, end_date, timeframe):
+def fetch_moex_candles_all(ticker, start_date, end_date, timeframe, market="shares", board="TQBR"):
+    """
+    Получает свечи для указанного тикера с MOEX ISS API.
+
+    Args:
+        ticker (str): Тикер инструмента.
+        start_date (str): Начальная дата (YYYY-MM-DD).
+        end_date (str): Конечная дата (YYYY-MM-DD).
+        timeframe (str): Таймфрейм ('1m', '10m', '1h', 'daily', 'weekly', 'monthly', 'quarterly').
+        market (str): Рынок ('shares', 'index', 'currency').
+        board (str): Торговая доска ('TQBR', 'MICEXINDEXCF', 'RTSI', 'CETS').
+
+    Returns:
+        pd.DataFrame: Данные свечей или None при ошибке.
+    """
     timeframe_map = {
         '1m': 1, '10m': 10, '1h': 60, 'daily': 24, 'weekly': 7, 'monthly': 31, 'quarterly': 4
     }
     interval = timeframe_map.get(timeframe.lower(), 24)
-    url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/{ticker}/candles.csv"
+
+    # Формирование URL в зависимости от рынка и доски
+    if market == "index":
+        url = f"https://iss.moex.com/iss/engines/stock/markets/index/boards/{board}/securities/{ticker}/candles.csv"
+    elif market == "currency":
+        url = f"https://iss.moex.com/iss/engines/currency/markets/selt/boards/{board}/securities/{ticker}/candles.csv"
+    else:
+        url = f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/{board}/securities/{ticker}/candles.csv"
+
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
@@ -29,7 +51,7 @@ def fetch_moex_candles_all(ticker, start_date, end_date, timeframe):
         try:
             response = requests.get(url, params=params, headers=headers)
             if response.status_code != 200:
-                print(f"Ошибка запроса: {response.status_code}")
+                print(f"Ошибка запроса для {ticker}: {response.status_code}")
                 break
             csv_text = response.content.decode('utf-8')
             df = pd.read_csv(StringIO(csv_text), sep=';', skiprows=2)
@@ -38,7 +60,7 @@ def fetch_moex_candles_all(ticker, start_date, end_date, timeframe):
                 break
 
             if 'begin' not in df.columns:
-                print(f"Нет столбца 'begin' в данных")
+                print(f"Нет столбца 'begin' в данных для {ticker}")
                 break
 
             all_data.append(df)
@@ -50,12 +72,12 @@ def fetch_moex_candles_all(ticker, start_date, end_date, timeframe):
                 break
 
         except Exception as e:
-            print(f"Ошибка при запросе: {e}")
+            print(f"Ошибка при запросе для {ticker}: {e}")
             break
 
     if all_data:
         full_df = pd.concat(all_data, ignore_index=True)
-        print(f"Объединено {len(full_df)} строк данных")
+        print(f"Объединено {len(full_df)} строк данных для {ticker}")
         return full_df
     else:
         return None
@@ -99,7 +121,20 @@ def is_data_outdated(file_path, timeframe, period_years):
     threshold = timeframe_thresholds.get(timeframe.lower(), 24 * 3600)
     return (now - mod_time).total_seconds() >= threshold
 
-def get_historical_data(ticker, timeframe, period_years):
+def get_historical_data(ticker, timeframe, period_years, market="shares", board="TQBR"):
+    """
+    Получает исторические данные для тикера.
+
+    Args:
+        ticker (str): Тикер инструмента.
+        timeframe (str): Таймфрейм.
+        period_years (int): Количество лет.
+        market (str): Рынок ('shares', 'index', 'currency').
+        board (str): Торговая доска.
+
+    Returns:
+        pd.DataFrame: Данные или пустой DataFrame при ошибке.
+    """
     if not os.path.exists(HISTORICAL_DATA_DIR):
         os.makedirs(HISTORICAL_DATA_DIR)
 
@@ -119,7 +154,7 @@ def get_historical_data(ticker, timeframe, period_years):
         if missing_columns:
             print(f"Ошибка: в файле {file_path} отсутствуют столбцы: {missing_columns}")
             os.remove(file_path)
-            return get_historical_data(ticker, timeframe, period_years)
+            return get_historical_data(ticker, timeframe, period_years, market, board)
         return df
 
     end_date = now
@@ -128,7 +163,7 @@ def get_historical_data(ticker, timeframe, period_years):
     end_date_str = end_date.strftime('%Y-%m-%d')
 
     if timeframe.lower() == '4h':
-        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, '1h')
+        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, '1h', market, board)
         if data is None or data.empty:
             print(f"Не удалось получить 1-часовые данные для {ticker} для агрегации в 4h")
             return pd.DataFrame()
@@ -136,7 +171,7 @@ def get_historical_data(ticker, timeframe, period_years):
         data.rename(columns={'begin': 'date'}, inplace=True)
         data = aggregate_to_4h(data)
     else:
-        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, timeframe)
+        data = fetch_moex_candles_all(ticker, start_date_str, end_date_str, timeframe, market, board)
         if data is None or data.empty:
             print(f"Не удалось получить данные для {ticker} ({timeframe}, {period_years} лет)")
             return pd.DataFrame()
